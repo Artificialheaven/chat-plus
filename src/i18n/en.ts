@@ -14,7 +14,7 @@ export const en = {
     'Chats or attachments have not been saved locally. Retry before closing this page.',
   sessionDeleteFailed: 'Unable to delete this chat. Please try again.',
   settings: 'Settings',
-  appName: 'API usage demo',
+  appName: 'DeepSeek',
   deleteSessionModalContentTitle: 'Delete chat?',
   deleteSessionWithFilesDescription:
     'This chat and its uploaded files will be permanently deleted and cannot be recovered. Delete this chat?',
@@ -146,10 +146,13 @@ export const en = {
   apiKeyInvalid: 'Invalid API Key. Please check it and try again.',
   apiKeyVerificationFailed: 'Verification failed: {message}',
   historyImport: 'Import chat history',
-  historyImportConfirm: 'Import',
-  historyImportConfirmTitle: 'Import chat history?',
-  historyImportConfirmDescription:
-    'The uploaded chat history will replace all your current chats. Import anyway?',
+  historyImportSelectTitle: 'Choose chats to import',
+  historyImportSelectAll: 'Select all',
+  historyImportSelectionHint:
+    'Importing replaces all local chats and attachments with the selected chats. Unselected chats are not written.',
+  historyImportSelectedCount: 'Import {count} chats',
+  historyImportItemMeta: '{messages} messages · {size}',
+  historyImportEmpty: 'No importable chats in this archive',
   historyImportDescription:
     'Importing chat history replaces all local chats and attachments. Supports ZIP files exported from DeepSeek.',
   historyImportedOne: 'Imported 1 chat',
