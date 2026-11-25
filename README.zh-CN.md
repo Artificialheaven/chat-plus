@@ -27,6 +27,15 @@ pnpm build
 
 产物位于 `dist/`，可部署到静态服务器，也可直接打开 `dist/index.html`。直接打开时，浏览器和 API 服务需允许 `file://` 页面的存储与跨域请求。
 
+单元测试与类型检查：
+
+```sh
+pnpm test
+pnpm type
+```
+
+线上站点的部署流程见 [scripts/](scripts/README.md)：`deploy.sh`（安装 → 类型检查 → 测试 → 构建 → 发布）、`backup.sh`，以及 nginx 与 systemd 模板。
+
 ## 功能
 
 - 多会话、自动标题、重命名与删除；编辑提问、重新生成和切换消息分支。

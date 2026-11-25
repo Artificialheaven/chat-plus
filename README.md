@@ -27,6 +27,15 @@ pnpm build
 
 The output is written to `dist/`. Deploy it to a static web server or open `dist/index.html` directly. Opening the file directly requires browser support for storage on `file://` pages and an API service that permits their cross-origin requests.
 
+Run the unit tests and type check with:
+
+```sh
+pnpm test
+pnpm type
+```
+
+[scripts/](scripts/README.md) holds the deployment runbook used for the live site: `deploy.sh` (install → type check → test → build → publish), `backup.sh`, plus the nginx and systemd templates.
+
 ## Features
 
 - Multiple conversations with automatic titles, renaming, and deletion; edit prompts, regenerate replies, and switch between message branches.
