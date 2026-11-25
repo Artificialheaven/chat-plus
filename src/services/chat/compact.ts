@@ -2,6 +2,7 @@ import { ApiError, streamMessage } from '../api/client.js'
 import type { ChatModel, CreateMessageRequest, MessageParam, StopReason } from '../api/types.js'
 import { translate } from '../../i18n/index.js'
 import { toRequestMessages } from './reply.js'
+import { estimateRoundTokens } from './tokens.js'
 import type { AssistantMessage, Message, SessionCompaction, UserMessage } from './types.js'
 
 export type CompactRound = [UserMessage, AssistantMessage]
@@ -28,16 +29,43 @@ export const getActiveCompaction = (
     ? compaction
     : undefined
 
+/** 保留尾部的策略：按 token 预算选轮次，而不是固定轮数。 */
+export type RetainPolicy = {
+  /** 最近对话原样保留的 token 预算 */
+  retainTokens: number
+  /** 至少保留的轮数；即使单轮就超出预算也不清空最近对话 */
+  minRounds?: number
+}
+
 /**
- * 计算压缩边界：保留最近 keepRounds 轮，其余轮次进入摘要。
+ * 从最近一轮往前累加，按 token 预算决定保留哪些轮次。
+ * 至少保留 minRounds 轮，因此单轮超大时也会保留这一轮而不是全部压缩掉。
+ */
+export const retentionRounds = (rounds: CompactRound[], policy: RetainPolicy): number => {
+  const floor = Math.max(0, Math.min(policy.minRounds ?? 1, rounds.length))
+  let kept = 0
+  let used = 0
+  for (let index = rounds.length - 1; index >= 0; index--) {
+    const cost = estimateRoundTokens(rounds[index] as CompactRound)
+    if (kept >= floor && used + cost > policy.retainTokens) {
+      break
+    }
+    used += cost
+    kept += 1
+  }
+  return Math.max(kept, floor)
+}
+
+/**
+ * 计算压缩边界：按 token 预算保留最近若干轮，其余轮次进入摘要。
  * 已有摘要时只把边界之后的新轮次送去压缩，避免重复发送旧内容。
  */
 export const planCompaction = (
   rounds: CompactRound[],
-  keepRounds: number,
+  policy: RetainPolicy,
   previousUpToId?: string
 ): CompactPlan | null => {
-  const keep = Math.max(0, Math.min(keepRounds, rounds.length))
+  const keep = retentionRounds(rounds, policy)
   const summarizable = rounds.slice(0, rounds.length - keep)
   if (summarizable.length === 0) {
     return null

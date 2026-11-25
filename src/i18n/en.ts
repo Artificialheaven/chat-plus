@@ -112,9 +112,9 @@ export const en = {
   settingsCompactThreshold: 'Trigger threshold',
   settingsCompactThresholdDescription:
     'In tokens. Default 900,000. Must be lower than the context limit.',
-  settingsCompactKeepRounds: 'Rounds kept after compaction',
-  settingsCompactKeepRoundsDescription:
-    'Recent rounds kept verbatim outside the summary. Default 3.',
+  settingsCompactRetainPercent: 'Context kept after compaction (%)',
+  settingsCompactRetainPercentDescription:
+    'Converted to a token budget from the context limit; that much recent conversation stays verbatim outside the summary. Higher keeps more and compacts less. Default 16%.',
   settingsTokenUnit: 'tokens',
   settingsRestoreContextDefaults: 'Restore defaults',
   compactLabel: 'Context summary',

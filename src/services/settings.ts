@@ -25,16 +25,17 @@ type Settings = {
   contextLimit: number
   /** 触发压缩的上下文占用阈值，单位 token */
   compactThreshold: number
-  /** 压缩后原样保留的最近轮数 */
-  compactKeepRounds: number
+  /** 压缩后原样保留的最近对话占比（百分比，按 token 折算） */
+  compactRetainPercent: number
 }
 
 export const DEFAULT_CONTEXT_LIMIT = 1_000_000
 export const DEFAULT_COMPACT_THRESHOLD = 900_000
-export const DEFAULT_COMPACT_KEEP_ROUNDS = 3
+export const DEFAULT_COMPACT_RETAIN_PERCENT = 16
 export const MIN_CONTEXT_LIMIT = 8_000
 export const MAX_CONTEXT_LIMIT = 4_000_000
-export const MAX_COMPACT_KEEP_ROUNDS = 50
+export const MIN_COMPACT_RETAIN_PERCENT = 1
+export const MAX_COMPACT_RETAIN_PERCENT = 50
 
 const KEYS = {
   apiKey: 'chat-demo:api-key',
@@ -49,7 +50,7 @@ const KEYS = {
   autoCompact: 'chat-demo:auto-compact',
   contextLimit: 'chat-demo:context-limit',
   compactThreshold: 'chat-demo:compact-threshold',
-  compactKeepRounds: 'chat-demo:compact-keep-rounds',
+  compactRetainPercent: 'chat-demo:compact-retain-percent',
 } as const
 
 const read = (key: string) => {
@@ -135,11 +136,11 @@ const initialCompactThreshold = readNumber(
   1,
   initialContextLimit - 1
 )
-const initialCompactKeepRounds = readNumber(
-  KEYS.compactKeepRounds,
-  DEFAULT_COMPACT_KEEP_ROUNDS,
-  0,
-  MAX_COMPACT_KEEP_ROUNDS
+const initialCompactRetainPercent = readNumber(
+  KEYS.compactRetainPercent,
+  DEFAULT_COMPACT_RETAIN_PERCENT,
+  MIN_COMPACT_RETAIN_PERCENT,
+  MAX_COMPACT_RETAIN_PERCENT
 )
 
 export const useSettings = create<Settings>(() => ({
@@ -156,7 +157,7 @@ export const useSettings = create<Settings>(() => ({
   autoCompact: read(KEYS.autoCompact) !== 'false',
   contextLimit: initialContextLimit,
   compactThreshold: initialCompactThreshold,
-  compactKeepRounds: initialCompactKeepRounds,
+  compactRetainPercent: initialCompactRetainPercent,
 }))
 
 export const setLocale = (locale: Locale) => {
@@ -229,10 +230,20 @@ export const setCompactThreshold = (value: number) => {
   useSettings.setState({ compactThreshold })
 }
 
-export const setCompactKeepRounds = (value: number) => {
-  const compactKeepRounds = clampNumber(value, 0, MAX_COMPACT_KEEP_ROUNDS)
-  write(KEYS.compactKeepRounds, String(compactKeepRounds))
-  useSettings.setState({ compactKeepRounds })
+export const setCompactRetainPercent = (value: number) => {
+  const compactRetainPercent = clampNumber(
+    Math.round(value),
+    MIN_COMPACT_RETAIN_PERCENT,
+    MAX_COMPACT_RETAIN_PERCENT
+  )
+  write(KEYS.compactRetainPercent, String(compactRetainPercent))
+  useSettings.setState({ compactRetainPercent })
+}
+
+/** 压缩时原样保留的尾部 token 预算：按上下文上限的占比折算。 */
+export const compactRetainTokens = (): number => {
+  const { contextLimit, compactRetainPercent } = useSettings.getState()
+  return Math.max(1, Math.round((contextLimit * compactRetainPercent) / 100))
 }
 
 /** 恢复安全审核与上下文压缩的默认值。 */
@@ -241,12 +252,12 @@ export const resetContextSettings = () => {
   write(KEYS.autoCompact, null)
   write(KEYS.contextLimit, null)
   write(KEYS.compactThreshold, null)
-  write(KEYS.compactKeepRounds, null)
+  write(KEYS.compactRetainPercent, null)
   useSettings.setState({
     safetyCheck: true,
     autoCompact: true,
     contextLimit: DEFAULT_CONTEXT_LIMIT,
     compactThreshold: DEFAULT_COMPACT_THRESHOLD,
-    compactKeepRounds: DEFAULT_COMPACT_KEEP_ROUNDS,
+    compactRetainPercent: DEFAULT_COMPACT_RETAIN_PERCENT,
   })
 }

@@ -18,7 +18,7 @@ import {
   uploadAttachment,
   useUploads,
 } from '../attachments.js'
-import { useSettings } from '../settings.js'
+import { compactRetainTokens, useSettings } from '../settings.js'
 import { appendBranch, getVisibleMessages, normalizeSession, selectVersion } from './branches.js'
 import {
   buildCompactionMessages,
@@ -826,7 +826,7 @@ const runCompaction = async ({
   previousSummary,
   previousUpToId,
   beforeTokens,
-  keepRounds,
+  keptRounds,
   controller,
   automatic,
 }: {
@@ -836,7 +836,8 @@ const runCompaction = async ({
   previousSummary?: string
   previousUpToId?: string
   beforeTokens: number
-  keepRounds: number
+  /** 本次压缩后实际保留原样的轮数，仅作记录 */
+  keptRounds: number
   controller: AbortController
   automatic: boolean
 }): Promise<CompactionResult> => {
@@ -873,7 +874,7 @@ const runCompaction = async ({
         summary,
         createdAt: Date.now(),
         upToId: plan.upToId,
-        keepRounds,
+        keepRounds: keptRounds,
         rounds: plan.rounds,
         beforeTokens,
         afterTokens,
@@ -932,7 +933,7 @@ const autoCompactIfNeeded = async (
   }
   const plan = planCompaction(
     getContextRounds(request.history),
-    settings.compactKeepRounds,
+    { retainTokens: compactRetainTokens() },
     active?.upToId
   )
   if (!plan) {
@@ -950,7 +951,7 @@ const autoCompactIfNeeded = async (
         : undefined,
     previousUpToId: active?.upToId,
     beforeTokens: before.tokens,
-    keepRounds: settings.compactKeepRounds,
+    keptRounds: plan.kept.length,
     controller,
     automatic: true,
   })
@@ -970,7 +971,11 @@ const compactAfterOverflow = async (
   }
   const path = getVisibleMessages(session)
   const active = getActiveCompaction(session.compaction, path)
-  const plan = planCompaction(getContextRounds(path), 0, active?.upToId)
+  const plan = planCompaction(
+    getContextRounds(path),
+    { retainTokens: 0, minRounds: 0 },
+    active?.upToId
+  )
   if (!plan) {
     return false
   }
@@ -985,7 +990,7 @@ const compactAfterOverflow = async (
         : undefined,
     previousUpToId: active?.upToId,
     beforeTokens: before.tokens,
-    keepRounds: 0,
+    keptRounds: plan.kept.length,
     controller,
     automatic: true,
   })
@@ -1006,12 +1011,11 @@ export const compactSession = (sessionId: string): CompactSessionResult => {
   if (isSessionBusy(sessionId)) {
     return 'busy'
   }
-  const settings = useSettings.getState()
   const path = getVisibleMessages(session)
   const active = getActiveCompaction(session.compaction, path)
   const plan = planCompaction(
     getContextRounds(path),
-    settings.compactKeepRounds,
+    { retainTokens: compactRetainTokens() },
     active?.upToId
   )
   if (!plan) {
@@ -1028,7 +1032,7 @@ export const compactSession = (sessionId: string): CompactSessionResult => {
         : undefined,
     previousUpToId: active?.upToId,
     beforeTokens: before.tokens,
-    keepRounds: settings.compactKeepRounds,
+    keptRounds: plan.kept.length,
     controller: new AbortController(),
     automatic: false,
   })

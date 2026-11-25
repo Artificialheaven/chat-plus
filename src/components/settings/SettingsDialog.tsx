@@ -23,13 +23,14 @@ import { useIsMobile } from '../../app/viewport.js'
 import { useChatStore } from '../../services/chat/store.js'
 import { regionCodes, getRegionName, provinces } from '../../services/location.js'
 import {
-  MAX_COMPACT_KEEP_ROUNDS,
+  MAX_COMPACT_RETAIN_PERCENT,
+  MIN_COMPACT_RETAIN_PERCENT,
   MAX_CONTEXT_LIMIT,
   MIN_CONTEXT_LIMIT,
   isChineseBrowser,
   resetContextSettings,
   setAutoCompact,
-  setCompactKeepRounds,
+  setCompactRetainPercent,
   setCompactThreshold,
   setContextLimit,
   setLocale,
@@ -436,7 +437,7 @@ const ChatSettings = () => {
   const autoCompact = useSettings((state) => state.autoCompact)
   const contextLimit = useSettings((state) => state.contextLimit)
   const compactThreshold = useSettings((state) => state.compactThreshold)
-  const compactKeepRounds = useSettings((state) => state.compactKeepRounds)
+  const compactRetainPercent = useSettings((state) => state.compactRetainPercent)
 
   return (
     <>
@@ -471,13 +472,13 @@ const ChatSettings = () => {
         onChange={setCompactThreshold}
       />
       <NumberSetting
-        label={t('settingsCompactKeepRounds')}
-        description={t('settingsCompactKeepRoundsDescription')}
-        value={compactKeepRounds}
-        min={0}
-        max={MAX_COMPACT_KEEP_ROUNDS}
+        label={t('settingsCompactRetainPercent')}
+        description={t('settingsCompactRetainPercentDescription')}
+        value={compactRetainPercent}
+        min={MIN_COMPACT_RETAIN_PERCENT}
+        max={MAX_COMPACT_RETAIN_PERCENT}
         step={1}
-        onChange={setCompactKeepRounds}
+        onChange={setCompactRetainPercent}
       />
       <div className={styles.contextActions}>
         <Button variant="outlined" size="m" onClick={resetContextSettings}>

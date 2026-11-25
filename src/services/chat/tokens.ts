@@ -54,6 +54,10 @@ const replyTokens = (message: AssistantMessage): number => {
   return tokens
 }
 
+/** 单轮（提问 + 回复）在请求里的 token 占用；不含 system 开销。 */
+export const estimateRoundTokens = ([user, reply]: [UserMessage, AssistantMessage]): number =>
+  userTokens(user) + replyTokens(reply)
+
 const roundsTokens = (rounds: [UserMessage, AssistantMessage][]): number =>
   rounds.reduce((sum, [user, reply]) => sum + userTokens(user) + replyTokens(reply), 0)
 

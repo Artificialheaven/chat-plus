@@ -106,8 +106,9 @@ export const zh = {
   settingsCompactThreshold: '触发阈值',
   settingsCompactThresholdDescription:
     '单位 token，默认 900,000；必须小于上下文上限，达到后触发压缩。',
-  settingsCompactKeepRounds: '压缩后保留轮数',
-  settingsCompactKeepRoundsDescription: '摘要之外原样保留最近 x 轮对话，默认 3 轮。',
+  settingsCompactRetainPercent: '压缩后保留比例（%）',
+  settingsCompactRetainPercentDescription:
+    '按上下文上限的比例折算成 token 预算，摘要之外原样保留这段时间的对话。比例越大保留越多、压缩得越少，默认 16%。',
   settingsTokenUnit: 'token',
   settingsRestoreContextDefaults: '恢复默认',
   compactLabel: '上下文摘要',
