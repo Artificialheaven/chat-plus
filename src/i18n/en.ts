@@ -2,6 +2,21 @@ import type { zh } from './zh.js'
 
 export const en = {
   welcomeMessageChat250808: 'How can I help you?',
+  partnerNone: 'Without a partner the default system prompt is used',
+  partnerDefaultPrompt: 'Default prompt: {prompt}',
+  partnerAdd: 'Add partner',
+  partnerEmpty: 'No partners yet. Add one below.',
+  partnerName: 'Name',
+  partnerNamePlaceholder: 'e.g. Code partner',
+  partnerSystemPrompt: 'System prompt',
+  partnerSystemPromptPlaceholder: 'Leave empty to use the default prompt',
+  partnerPhi: 'Post-history instruction',
+  partnerPhiDescription:
+    'Appended after the history and before the current question, to steer this reply.',
+  partnerGreeting: 'Greeting',
+  partnerGreetingPlaceholder: 'Shown when starting a new chat',
+  partnerUse: 'Use this partner',
+  partnerActive: 'Active',
   contentCaveat: 'AI-generated, for reference only',
   expandSiderbarButton: 'Open sidebar',
   collapseSiderbarButton: 'Close sidebar',
@@ -99,6 +114,7 @@ export const en = {
   settingsLocationRegion: 'Select country or region',
   settingDialogAsideGeneralOptionLabel: 'General',
   settingDialogAsideChatOptionLabel: 'Chat & context',
+  settingDialogAsidePartnerOptionLabel: 'Partner',
   settingDialogAsideDataOptionLabel: 'Data',
   settingsSafetyCheck: 'Safety check',
   settingsSafetyCheckDescription:

@@ -8,7 +8,7 @@ import {
   retentionRounds,
   type CompactRound,
 } from '../src/services/chat/compact.js'
-import { buildSystemPrompt } from '../src/services/chat/prompt.js'
+import { DEFAULT_SYSTEM_PROMPT, buildSystemPrompt } from '../src/services/chat/prompt.js'
 import { compactRetainTokens } from '../src/services/settings.js'
 import type { AssistantMessage, UserMessage } from '../src/services/chat/types.js'
 
@@ -30,7 +30,10 @@ const reply = (id: string, text: string): AssistantMessage => ({
   blocks: [{ type: 'text', text }],
 })
 
-const round = (id: string, text: string): CompactRound => [user(`${id}u`, text), reply(`${id}a`, text)]
+const round = (id: string, text: string): CompactRound => [
+  user(`${id}u`, text),
+  reply(`${id}a`, text),
+]
 
 test('保留尾部按 token 预算而不是轮数', () => {
   const short = round('s', 'hi')
@@ -71,7 +74,12 @@ test('已有摘要时只取边界之后的新轮次', () => {
 })
 
 test('压缩请求重放正常消息并追加指令', () => {
-  const history = [user('u1', '第一个问题'), reply('a1', '第一个回答'), user('u2', '第二个问题'), reply('a2', '第二个回答')]
+  const history = [
+    user('u1', '第一个问题'),
+    reply('a1', '第一个回答'),
+    user('u2', '第二个问题'),
+    reply('a2', '第二个回答'),
+  ]
   const messages = buildCompactionMessages(history, { upToId: 'a2' })
   assert.equal(messages.length, 5)
   assert.equal(messages.at(-1)?.role, 'user')
@@ -80,7 +88,7 @@ test('压缩请求重放正常消息并追加指令', () => {
 })
 
 test('system 复用正式请求的提示词并携带旧摘要', () => {
-  assert.match(buildSystemPrompt(), /^该助手为DeepSeek/)
+  assert.equal(buildSystemPrompt(), DEFAULT_SYSTEM_PROMPT)
   const withSummary = buildSystemPrompt('旧摘要内容')
   assert.match(withSummary, /<context_summary>/)
   assert.match(withSummary, /旧摘要内容/)
@@ -94,7 +102,10 @@ test('上下文超限错误识别', async () => {
   const { ApiError } = await import('../src/services/api/client.js')
   const overflow = (message: string, status = 400) => new ApiError('http', message, status)
 
-  assert.equal(isContextOverflowError(overflow("This model's maximum context length is 65536 tokens")), true)
+  assert.equal(
+    isContextOverflowError(overflow("This model's maximum context length is 65536 tokens")),
+    true
+  )
   assert.equal(isContextOverflowError(overflow('prompt is too long')), true)
   assert.equal(isContextOverflowError(overflow('too many input tokens', 413)), true)
   assert.equal(isContextOverflowError(overflow('invalid api key', 401)), false)

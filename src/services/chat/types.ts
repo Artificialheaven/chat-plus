@@ -121,6 +121,8 @@ export type SessionCompaction = {
 
 export type Message = UserMessage | AssistantMessage
 
+import type { Partner } from '../partners.js'
+
 export type Session = {
   id: string
   title: string
@@ -132,6 +134,8 @@ export type Session = {
   rootMessageId?: string | null
   /** 当前分支的上下文压缩记录；导入的历史不包含该字段。 */
   compaction?: SessionCompaction
+  /** 创建时选中的搭档快照；后续编辑搭档不会改写已有会话的行为。 */
+  partner?: Partner
 }
 
 /** 会话列表元数据；消息只在打开会话时加载。 */

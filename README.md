@@ -43,6 +43,7 @@ pnpm type
 - Upload, paste, or drag and drop attachments; use voice input and read replies aloud. A live audio spectrum appears in the first row of the input area while recording on mobile.
 - Markdown, syntax highlighting, KaTeX math, and Mermaid diagrams.
 - Safety-check toggle, automatic context compaction, and the `/compact` command; summaries are shown separately and local messages are not deleted.
+- Partners: define roles with their own system prompt, post-history instruction, and greeting; pick one to start a chat, or fall back to the default prompt.
 - Simplified Chinese and English, light and dark themes, mobile layouts, location settings, and chat history import and export.
 
 ## Data and storage

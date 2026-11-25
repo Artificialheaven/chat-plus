@@ -19,6 +19,7 @@ import {
   useUploads,
 } from '../attachments.js'
 import { compactRetainTokens, useSettings } from '../settings.js'
+import { activePartner } from '../partners.js'
 import { appendBranch, getVisibleMessages, normalizeSession, selectVersion } from './branches.js'
 import {
   buildCompactionMessages,
@@ -421,10 +422,8 @@ const waitForIdle = (sessionId?: string) =>
   new Promise<void>((resolve) => {
     const isIdle = (state: ChatState) =>
       sessionId === undefined
-        ? Object.keys(state.streaming).length === 0 &&
-          Object.keys(state.compacting).length === 0
-        : !Object.hasOwn(state.streaming, sessionId) &&
-          !Object.hasOwn(state.compacting, sessionId)
+        ? Object.keys(state.streaming).length === 0 && Object.keys(state.compacting).length === 0
+        : !Object.hasOwn(state.streaming, sessionId) && !Object.hasOwn(state.compacting, sessionId)
     if (isIdle(get())) {
       resolve()
       return
@@ -625,6 +624,7 @@ export const sendMessage = (targetSessionId: string | null) => {
     return false
   }
   if (sessionId === null) {
+    const partner = activePartner()
     const session: Session = {
       id: createId(),
       title: '',
@@ -632,6 +632,8 @@ export const sendMessage = (targetSessionId: string | null) => {
       updatedAt: now,
       messages: [],
       rootMessageId: null,
+      // 快照搭档：之后编辑搭档不会改写这轮对话的行为
+      ...(partner ? { partner: { ...partner } } : {}),
     }
     sessionId = session.id
     touchSession(session.id)
@@ -854,7 +856,7 @@ const runCompaction = async ({
       apiKey: settings.apiKey ?? '',
       model: MODEL,
       // 与正式请求一致的 system、消息与工具声明，命中 provider 的前缀缓存。
-      system: buildSystemPrompt(previousSummary),
+      system: buildSystemPrompt(previousSummary, getSession(sessionId)?.partner),
       messages: buildCompactionMessages(history, { upToId: plan.upToId, previousUpToId }),
       tools: serverTools(plan.summarizable.at(-1)?.[1].search ?? false),
       safetyCheck: settings.safetyCheck,
@@ -922,12 +924,7 @@ const autoCompactIfNeeded = async (
     return null
   }
   const active = getActiveCompaction(getSession(sessionId)?.compaction, request.history)
-  const usage = estimateContextUsage(
-    request.history,
-    request.question,
-    active,
-    request.prefix
-  )
+  const usage = estimateContextUsage(request.history, request.question, active, request.prefix)
   if (usage.tokens < settings.compactThreshold) {
     return null
   }
@@ -1336,10 +1333,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
         updateReply(sessionId, reply)
         persist(sessionId)
         // 摘要覆盖的轮次不再回传；摘要本身拼进 system，消息角色保持不变。
-        const compaction = getActiveCompaction(
-          getSession(sessionId)?.compaction,
-          prepared.history
-        )
+        const compaction = getActiveCompaction(getSession(sessionId)?.compaction, prepared.history)
         const boundary = compaction
           ? prepared.history.findIndex((message) => message.id === compaction.upToId)
           : -1
@@ -1348,14 +1342,16 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           prepared.question,
           prepared.prefix,
           initial.thinking ?? false,
-          latestReminder
+          latestReminder,
+          getSession(sessionId)?.partner?.phi
         )
         const settings = useSettings.getState()
+        const session = getSession(sessionId)
         const events = streamMessage(
           settings.apiKey ?? '',
           {
             model: initial.model ?? MODEL,
-            system: buildSystemPrompt(compaction?.summary),
+            system: buildSystemPrompt(compaction?.summary, session?.partner),
             messages,
             thinking: { type: initial.thinking ? 'enabled' : 'disabled' },
             ...(settings.safetyCheck ? { safety_check: SAFETY_CHECK } : {}),

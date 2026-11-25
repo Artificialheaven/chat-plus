@@ -185,8 +185,7 @@ export const canContinueReply = (reply: AssistantMessage): boolean => {
     return false
   }
   return (
-    reply.status === 'stopped' ||
-    (reply.status === 'done' && reply.stopReason === 'max_tokens')
+    reply.status === 'stopped' || (reply.status === 'done' && reply.stopReason === 'max_tokens')
   )
 }
 
@@ -305,7 +304,8 @@ export const toRequestMessages = (
   question: UserMessage,
   prefix?: AssistantMessage,
   thinking = prefix?.thinking ?? false,
-  latestReminder?: string
+  latestReminder?: string,
+  phi?: string
 ): MessageParam[] => {
   const messages: MessageParam[] = []
   let previousReminder: string | undefined
@@ -325,6 +325,11 @@ export const toRequestMessages = (
     messages.push(toUserParam(user), toAssistantParam(reply))
   }
   appendReminder(latestReminder)
+  // 搭档的历史后指令：位于历史之后、当前提问之前。
+  const instruction = phi?.trim()
+  if (instruction) {
+    messages.push({ role: 'latest_reminder', content: instruction })
+  }
   messages.push(toUserParam(question))
   if (prefix?.prefix) {
     const assistant = toAssistantParam(prefix, true, thinking)

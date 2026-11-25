@@ -23,7 +23,15 @@ import {
   type ImportSource,
 } from '../../services/chat/backup.js'
 import { useIsMobile } from '../../app/viewport.js'
+import { DEFAULT_SYSTEM_PROMPT } from '../../services/chat/prompt.js'
 import { useChatStore } from '../../services/chat/store.js'
+import {
+  addPartner,
+  removePartner,
+  setActivePartner,
+  updatePartner,
+  usePartners,
+} from '../../services/partners.js'
 import { regionCodes, getRegionName, provinces } from '../../services/location.js'
 import {
   MAX_COMPACT_RETAIN_PERCENT,
@@ -77,6 +85,7 @@ const sections: { value: SettingsSection; label: TranslationKey; icon: ReactNode
     label: 'settingDialogAsideChatOptionLabel',
     icon: <IconThinkOutline16 />,
   },
+  { value: 'partner', label: 'settingDialogAsidePartnerOptionLabel', icon: <IconThinkOutline16 /> },
   { value: 'data', label: 'settingDialogAsideDataOptionLabel', icon: <IconDataOutline16 /> },
 ]
 
@@ -133,6 +142,8 @@ const SettingsContent = ({
             </>
           ) : section === 'chat' ? (
             <ChatSettings />
+          ) : section === 'partner' ? (
+            <PartnerSettings />
           ) : (
             <>
               <ApiKeyField editor={apiKeyEditor} />
@@ -486,6 +497,94 @@ const ChatSettings = () => {
       <div className={styles.contextActions}>
         <Button variant="outlined" size="m" onClick={resetContextSettings}>
           {t('settingsRestoreContextDefaults')}
+        </Button>
+      </div>
+    </>
+  )
+}
+
+/** 搭档设置：可选多个角色，每个角色带名称、系统提示词、历史后指令与开场白。 */
+const PartnerSettings = () => {
+  const t = useTranslate()
+  const partners = usePartners((state) => state.partners)
+  const activeId = usePartners((state) => state.activeId)
+
+  return (
+    <>
+      <div className={clsx(styles.cell, styles.row)}>
+        <div className={styles.text}>
+          <div className={styles.label}>{t('settingDialogAsidePartnerOptionLabel')}</div>
+          <div className={styles.description}>
+            {t('partnerDefaultPrompt', { prompt: DEFAULT_SYSTEM_PROMPT })}
+          </div>
+        </div>
+        <Button
+          variant={activeId === null ? 'primary' : 'outlined'}
+          size="m"
+          onClick={() => setActivePartner(null)}
+        >
+          {activeId === null ? t('partnerActive') : t('partnerNone')}
+        </Button>
+      </div>
+      {partners.length === 0 ? (
+        <div className={styles.partnerEmpty}>{t('partnerEmpty')}</div>
+      ) : null}
+      {partners.map((partner) => (
+        <div key={partner.id} className={styles.partnerCard}>
+          <div className={styles.partnerHeader}>
+            <input
+              className={styles.partnerName}
+              value={partner.name}
+              placeholder={t('partnerNamePlaceholder')}
+              aria-label={t('partnerName')}
+              onChange={(event) => updatePartner(partner.id, { name: event.target.value })}
+            />
+            <Button
+              variant={activeId === partner.id ? 'primary' : 'outlined'}
+              size="m"
+              onClick={() => setActivePartner(partner.id)}
+            >
+              {activeId === partner.id ? t('partnerActive') : t('partnerUse')}
+            </Button>
+            <Button variant="dangerOutlined" size="m" onClick={() => removePartner(partner.id)}>
+              {t('delete')}
+            </Button>
+          </div>
+          <label className={styles.partnerField}>
+            <span className={styles.partnerLabel}>{t('partnerSystemPrompt')}</span>
+            <textarea
+              className={styles.partnerInput}
+              rows={3}
+              value={partner.systemPrompt}
+              placeholder={t('partnerSystemPromptPlaceholder')}
+              onChange={(event) => updatePartner(partner.id, { systemPrompt: event.target.value })}
+            />
+          </label>
+          <label className={styles.partnerField}>
+            <span className={styles.partnerLabel}>{t('partnerPhi')}</span>
+            <textarea
+              className={styles.partnerInput}
+              rows={2}
+              value={partner.phi}
+              placeholder={t('partnerPhiDescription')}
+              onChange={(event) => updatePartner(partner.id, { phi: event.target.value })}
+            />
+          </label>
+          <label className={styles.partnerField}>
+            <span className={styles.partnerLabel}>{t('partnerGreeting')}</span>
+            <textarea
+              className={styles.partnerInput}
+              rows={2}
+              value={partner.greeting}
+              placeholder={t('partnerGreetingPlaceholder')}
+              onChange={(event) => updatePartner(partner.id, { greeting: event.target.value })}
+            />
+          </label>
+        </div>
+      ))}
+      <div className={styles.contextActions}>
+        <Button variant="outlined" size="m" onClick={() => addPartner()}>
+          {t('partnerAdd')}
         </Button>
       </div>
     </>
