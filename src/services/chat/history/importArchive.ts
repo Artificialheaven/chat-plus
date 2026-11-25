@@ -3,17 +3,11 @@ import type { Session } from '../types.js'
 import { BackupError, fail } from './errors.js'
 import { readJsonEntry } from './entryJson.js'
 import { loadIndex, loadManifest } from './archiveCache.js'
-import { MANIFEST_PATH, parseFilesPath, parseSessionPath, sessionPath } from './paths.js'
+import { parseFilesPath, parseSessionPath, sessionPath } from './paths.js'
+import { listSourceEntries, openSourceEntry, type ImportSource } from './source.js'
 import { readSessionFile } from './schema.js'
 import { toLocalSession } from './toLocal.js'
-import {
-  ArchiveError,
-  isZipFile,
-  listArchiveEntries,
-  openArchiveEntry,
-  readEntry,
-  type ArchiveEntry,
-} from './zipReader.js'
+import { ArchiveError, isZipFile, readEntry, type ArchiveEntry } from './zipReader.js'
 
 export type ImportProgressCallback = (processed: number, total: number) => void
 
@@ -51,16 +45,6 @@ const imageType = (bytes: Uint8Array): string => {
   return ''
 }
 
-/** 读取 manifest 并校验格式版本；不是合法归档时抛出对应提示。 */
-const readManifest = async (file: File, entries: { path: string; directory: boolean }[]) => {
-  // manifest 必须是归档的首个条目
-  const first = entries.find((entry) => !entry.directory)
-  if (!first || first.path !== MANIFEST_PATH) {
-    return fail('backupUnrecognized')
-  }
-  await loadManifest(file)
-}
-
 const wrapArchiveError = (error: unknown): unknown =>
   error instanceof ArchiveError ? new BackupError('backupIncomplete') : error
 
@@ -68,12 +52,12 @@ const wrapArchiveError = (error: unknown): unknown =>
  * 检查 ZIP 格式、首个 manifest 条目及格式版本。
  * 校验失败时保留正在生成的回答和现有暂存数据。
  */
-export const checkArchiveFormat = async (file: File): Promise<void> => {
-  if (!(await isZipFile(file))) {
+export const checkArchiveFormat = async (source: ImportSource): Promise<void> => {
+  if (source.kind === 'zip' && !(await isZipFile(source.file))) {
     fail('backupUnrecognized')
   }
   try {
-    await readManifest(file, await listArchiveEntries(file))
+    await loadManifest(source)
   } catch (error) {
     throw wrapArchiveError(error)
   }
@@ -85,10 +69,10 @@ export const checkArchiveFormat = async (file: File): Promise<void> => {
  * 写入导入暂存存储；调用方负责先清空暂存，成功后替换正式数据，失败时清理暂存。
  */
 export const importArchive = async (
-  file: File,
+  source: ImportSource,
   options: ImportArchiveOptions = {}
 ): Promise<void> => {
-  if (!(await isZipFile(file))) {
+  if (source.kind === 'zip' && !(await isZipFile(source.file))) {
     fail('backupUnrecognized')
   }
   const { onProgress, sessionIds: selection } = options
@@ -147,10 +131,10 @@ export const importArchive = async (
   }
 
   try {
-    const entries = await listArchiveEntries(file)
-    await readManifest(file, entries)
+    const entries = await listSourceEntries(source)
+    await loadManifest(source)
 
-    const index = await loadIndex(file)
+    const index = await loadIndex(source)
     const listed = new Set(index.map((item) => item.id))
     if (listed.size !== index.length) {
       fail('backupIncomplete')
@@ -204,7 +188,7 @@ export const importArchive = async (
     onProgress?.(0, totalSessions)
 
     for (const item of targets) {
-      const entry = await openArchiveEntry(file, sessionPath(item.id))
+      const entry = await openSourceEntry(source, sessionPath(item.id))
       if (!entry) {
         return fail('backupIncomplete')
       }
@@ -219,7 +203,7 @@ export const importArchive = async (
         if (id === undefined) {
           continue
         }
-        const imageEntry = await openArchiveEntry(file, imagePath)
+        const imageEntry = await openSourceEntry(source, imagePath)
         if (!imageEntry) {
           return fail('backupIncomplete')
         }

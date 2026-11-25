@@ -32,6 +32,8 @@ declare const styles: {
   readonly "confirm": string;
   readonly "cellButton": string;
   readonly "mobileConfirm": string;
+  readonly "importActions": string;
+  readonly "importSearch": string;
   readonly "importSelection": string;
   readonly "importSelectionMain": string;
   readonly "importSelectionHint": string;

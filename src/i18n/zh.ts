@@ -101,8 +101,7 @@ export const zh = {
   settingsAutoCompact: '自动压缩上下文',
   settingsAutoCompactDescription: '发送前估算上下文占用，达到阈值时先压缩较早的对话再请求。',
   settingsContextLimit: '上下文上限',
-  settingsContextLimitDescription:
-    '单位 token，默认 1,000,000；用于计算占用比例并约束触发阈值。',
+  settingsContextLimitDescription: '单位 token，默认 1,000,000；用于计算占用比例并约束触发阈值。',
   settingsCompactThreshold: '触发阈值',
   settingsCompactThresholdDescription:
     '单位 token，默认 900,000；必须小于上下文上限，达到后触发压缩。',
@@ -145,6 +144,11 @@ export const zh = {
   historyImportSelectedCount: '导入 {count} 个对话',
   historyImportItemMeta: '{messages} 条消息 · {size}',
   historyImportEmpty: '该归档中没有可导入的对话',
+  historyImportFolder: '选择文件夹',
+  historyImportFolderHint:
+    '用于超过 4 GB 的归档：先手动解压，再选择解压出的文件夹，同样只读取选中的会话。',
+  historyImportSearchPlaceholder: '搜索对话标题',
+  historyImportSearchEmpty: '没有匹配的对话',
   historyImportDescription: '导入历史对话会覆盖全部本地对话和附件，支持 DeepSeek 导出的 ZIP 文件。',
   historyImportedOne: '已导入 1 个对话',
   historyImported: '已导入 {count} 个对话',

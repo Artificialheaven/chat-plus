@@ -2,6 +2,13 @@
 
 chat-demo 使用 `export_format_version: 3` 的历史会话 ZIP，导出文件名为 `deepseek_data-日期.zip`。字段定义见 [format.ts](./format.ts)，实际校验规则见 [schema.ts](./schema.ts)。
 
+## 导入来源
+
+支持两种来源，二者共用同一套校验与读取逻辑：
+
+- **ZIP 文件**：直接选择 `deepseek_data-日期.zip`。单卷 ZIP32 上限 4 GB，超过时解析器会拒绝（不支持 ZIP64）。
+- **解压后的目录**：先手动解压，再选择解压出的文件夹。目录来源没有 ZIP64 限制，也不要求 manifest 位于首位，其余行为与 ZIP 完全一致——同样只解压 manifest 与索引，再按需读取选中的会话与附件。
+
 ## 归档结构
 
 导出按以下顺序写入：

@@ -1,12 +1,15 @@
 import { formatDate } from '../../utils/format.js'
 import * as db from './db.js'
 import type { ArchiveInspection } from './history/inspectArchive.js'
+import type { ImportSource } from './history/source.js'
 import type { ImportProgressCallback } from './history/importArchive.js'
 import { replaceHistory, useChatStore } from './store.js'
 import type { Session } from './types.js'
 
 export type { ArchiveInspection, ArchiveSessionPreview } from './history/inspectArchive.js'
 export { BackupError } from './history/errors.js'
+export type { ImportSource } from './history/source.js'
+export { directorySource, zipSource } from './history/source.js'
 
 // 导入、导出与全部删除串行处理，避免读取归档时数据被清空或两个替换事务交错。
 let backupQueue: Promise<unknown> = Promise.resolve()
@@ -46,10 +49,10 @@ export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
  * 只读取目录、manifest 与索引，列出归档内的会话供用户勾选。
  * 不解压会话正文与图片，因此体积大的归档也能很快出列表。
  */
-export const inspectHistory = (file: File): Promise<ArchiveInspection> =>
+export const inspectHistory = (source: ImportSource): Promise<ArchiveInspection> =>
   enqueueBackup(async () => {
     const { inspectArchive } = await import('./history/inspectArchive.js')
-    return inspectArchive(file)
+    return inspectArchive(source)
   })
 
 /**
@@ -58,7 +61,7 @@ export const inspectHistory = (file: File): Promise<ArchiveInspection> =>
  * 传入 sessionIds 时只导入选中的会话；未选中任何会话时不改动本地数据。返回导入的会话数。
  */
 export const importHistory = (
-  file: File,
+  source: ImportSource,
   options: { sessionIds?: ReadonlySet<string>; onProgress?: ImportProgressCallback } = {}
 ): Promise<number> =>
   enqueueBackup(async () => {
@@ -66,8 +69,8 @@ export const importHistory = (
       return 0
     }
     const { checkArchiveFormat, importArchive } = await import('./history/importArchive.js')
-    await checkArchiveFormat(file)
-    return replaceHistory(() => importArchive(file, options))
+    await checkArchiveFormat(source)
+    return replaceHistory(() => importArchive(source, options))
   })
 
 /** 确认删除后调用：以空历史原子替换全部本地会话与附件，保留 API Key 和其他设置。 */

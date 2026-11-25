@@ -131,7 +131,7 @@ export const en = {
   compactAttachments: 'The compact command cannot be used with attachments.',
   compactEmptySummary: 'The summary was empty. Please try again.',
   compactInstruction:
-    'Compress the conversation above into a compact, factually accurate summary that can be used to continue the conversation.\nRequirements:\n- Keep the user\'s identity, preferences, constraints, and explicit requests;\n- Keep confirmed facts, key conclusions, decisions, unfinished tasks, and open questions;\n- Keep important code, file names, URLs, names, and numbers; do not invent details;\n- Remove greetings, repetition, and details that do not affect future conversation;\n- If the system prompt already carries a summary of earlier conversation, merge it with the new conversation into one complete summary;\n- Use the main language of the conversation and output Markdown;\n- Output only the summary body, with no explanation, preamble, or closing remark, and do not call any tool.',
+    "Compress the conversation above into a compact, factually accurate summary that can be used to continue the conversation.\nRequirements:\n- Keep the user's identity, preferences, constraints, and explicit requests;\n- Keep confirmed facts, key conclusions, decisions, unfinished tasks, and open questions;\n- Keep important code, file names, URLs, names, and numbers; do not invent details;\n- Remove greetings, repetition, and details that do not affect future conversation;\n- If the system prompt already carries a summary of earlier conversation, merge it with the new conversation into one complete summary;\n- Use the main language of the conversation and output Markdown;\n- Output only the summary body, with no explanation, preamble, or closing remark, and do not call any tool.",
   compactNotSmaller:
     'The summary did not make the context smaller, so this compaction was cancelled. Please try again.',
   avatarMenuSettingsDialogThemeItemLabel: 'Theme',
@@ -153,6 +153,11 @@ export const en = {
   historyImportSelectedCount: 'Import {count} chats',
   historyImportItemMeta: '{messages} messages · {size}',
   historyImportEmpty: 'No importable chats in this archive',
+  historyImportFolder: 'Choose folder',
+  historyImportFolderHint:
+    'For archives over 4 GB: extract the ZIP manually, then pick the extracted folder. Only the selected chats are read.',
+  historyImportSearchPlaceholder: 'Search chat titles',
+  historyImportSearchEmpty: 'No matching chats',
   historyImportDescription:
     'Importing chat history replaces all local chats and attachments. Supports ZIP files exported from DeepSeek.',
   historyImportedOne: 'Imported 1 chat',

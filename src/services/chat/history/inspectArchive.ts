@@ -1,7 +1,8 @@
 import { BackupError, fail } from './errors.js'
 import { loadIndex, loadManifest } from './archiveCache.js'
-import { MANIFEST_PATH, parseFilesPath, parseSessionPath } from './paths.js'
-import { ArchiveError, isZipFile, listArchiveEntries } from './zipReader.js'
+import { parseFilesPath, parseSessionPath } from './paths.js'
+import { listSourceEntries, type ImportSource } from './source.js'
+import { ArchiveError, isZipFile } from './zipReader.js'
 
 /** 导入前展示的单个会话元信息。 */
 export type ArchiveSessionPreview = {
@@ -26,19 +27,14 @@ export type ArchiveInspection = {
  * 只解析 ZIP 目录，再按路径读取 manifest 与 chat_session_index.json，供用户勾选要导入的会话。
  * 会话 JSON 与图片原件不在此处解压，因此大归档也能很快出列表。
  */
-export const inspectArchive = async (file: File): Promise<ArchiveInspection> => {
-  if (!(await isZipFile(file))) {
+export const inspectArchive = async (source: ImportSource): Promise<ArchiveInspection> => {
+  if (source.kind === 'zip' && !(await isZipFile(source.file))) {
     fail('backupUnrecognized')
   }
   try {
-    const entries = await listArchiveEntries(file)
-    // manifest 必须是归档的首个条目
-    const first = entries.find((entry) => !entry.directory)
-    if (!first || first.path !== MANIFEST_PATH) {
-      fail('backupUnrecognized')
-    }
-    await loadManifest(file)
-    const index = await loadIndex(file)
+    const entries = await listSourceEntries(source)
+    await loadManifest(source)
+    const index = await loadIndex(source)
 
     const sizes = new Map<string, { bytes: number; fileCount: number }>()
     const add = (id: string, bytes: number) => {

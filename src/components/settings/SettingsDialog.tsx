@@ -14,10 +14,13 @@ import {
 import {
   BackupError,
   clearHistory,
+  directorySource,
   exportHistory,
   importHistory,
   inspectHistory,
+  zipSource,
   type ArchiveInspection,
+  type ImportSource,
 } from '../../services/chat/backup.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { useChatStore } from '../../services/chat/store.js'
@@ -506,9 +509,15 @@ const ImportSelectionDialog = ({
   if (!inspection) {
     return null
   }
+  const [query, setQuery] = useState('')
+  const keyword = query.trim().toLowerCase()
+  const visible = keyword
+    ? inspection.sessions.filter((session) => (session.title ?? '').toLowerCase().includes(keyword))
+    : inspection.sessions
   const total = inspection.sessions.length
-  const allSelected = total > 0 && selected.size === total
-  const partiallySelected = selected.size > 0 && !allSelected
+  const visibleIds = visible.map((session) => session.id)
+  const allSelected = visible.length > 0 && visible.every((session) => selected.has(session.id))
+  const partiallySelected = !allSelected && visible.some((session) => selected.has(session.id))
   return (
     <Modal
       title={t('historyImportSelectTitle')}
@@ -540,7 +549,7 @@ const ImportSelectionDialog = ({
             <Checkbox
               checked={allSelected}
               indeterminate={partiallySelected}
-              onChange={historyImport.toggleAll}
+              onChange={(checked) => historyImport.toggleAll(visibleIds, checked)}
               ariaLabel={t('historyImportSelectAll')}
             />
             <span className={styles.importSelectAllLabel}>{t('historyImportSelectAll')}</span>
@@ -548,36 +557,48 @@ const ImportSelectionDialog = ({
               {selected.size} / {total}
             </span>
           </div>
-          <ul className={styles.importList}>
-            {inspection.sessions.map((session) => {
-              const checked = selected.has(session.id)
-              const label = session.title || t('untitledChat')
-              const date = formatDate(session.updatedAt)
-              return (
-                <li key={session.id} className={styles.importItem}>
-                  <Checkbox
-                    checked={checked}
-                    onChange={(next) => historyImport.toggle(session.id, next)}
-                    ariaLabel={label}
-                  />
-                  <button
-                    type="button"
-                    className={styles.importItemBody}
-                    onClick={() => historyImport.toggle(session.id, !checked)}
-                  >
-                    <span className={styles.importItemTitle}>{label}</span>
-                    <span className={styles.importItemMeta}>
-                      {t('historyImportItemMeta', {
-                        messages: session.messageCount,
-                        size: formatBytes(session.bytes),
-                      })}
-                      {date ? ` · ${date}` : ''}
-                    </span>
-                  </button>
-                </li>
-              )
-            })}
-          </ul>
+          <input
+            type="search"
+            className={styles.importSearch}
+            value={query}
+            placeholder={t('historyImportSearchPlaceholder')}
+            aria-label={t('historyImportSearchPlaceholder')}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          {visible.length === 0 ? (
+            <div className={styles.importSelectionHint}>{t('historyImportSearchEmpty')}</div>
+          ) : (
+            <ul className={styles.importList}>
+              {visible.map((session) => {
+                const checked = selected.has(session.id)
+                const label = session.title || t('untitledChat')
+                const date = formatDate(session.updatedAt)
+                return (
+                  <li key={session.id} className={styles.importItem}>
+                    <Checkbox
+                      checked={checked}
+                      onChange={(next) => historyImport.toggle(session.id, next)}
+                      ariaLabel={label}
+                    />
+                    <button
+                      type="button"
+                      className={styles.importItemBody}
+                      onClick={() => historyImport.toggle(session.id, !checked)}
+                    >
+                      <span className={styles.importItemTitle}>{label}</span>
+                      <span className={styles.importItemMeta}>
+                        {t('historyImportItemMeta', {
+                          messages: session.messageCount,
+                          size: formatBytes(session.bytes),
+                        })}
+                        {date ? ` · ${date}` : ''}
+                      </span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
         </>
       )}
     </Modal>
@@ -680,7 +701,7 @@ const SettingCell = ({
 
 /** 选文件后只读目录与索引出勾选列表；确认后按选中会话覆盖导入，任何错误都提示导入失败。 */
 const useHistoryImport = () => {
-  const [file, setFile] = useState<File | null>(null)
+  const [file, setFile] = useState<ImportSource | null>(null)
   const [inspection, setInspection] = useState<ArchiveInspection | null>(null)
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [inspecting, setInspecting] = useState(false)
@@ -694,7 +715,7 @@ const useHistoryImport = () => {
   }
 
   /** 只解压 manifest 与索引列出会话，默认全选；失败时清掉文件并提示原因。 */
-  const select = async (next: File) => {
+  const select = async (next: ImportSource) => {
     if (inspecting || importing.current) {
       return
     }
@@ -726,8 +747,19 @@ const useHistoryImport = () => {
     })
   }
 
-  const toggleAll = (checked: boolean) => {
-    setSelected(new Set(checked ? (inspection?.sessions.map((session) => session.id) ?? []) : []))
+  /** 全选只作用于当前可见（可能已过滤）的会话。 */
+  const toggleAll = (ids: string[], checked: boolean) => {
+    setSelected((current) => {
+      const next = new Set(current)
+      for (const id of ids) {
+        if (checked) {
+          next.add(id)
+        } else {
+          next.delete(id)
+        }
+      }
+      return next
+    })
   }
 
   const cancel = () => {
@@ -768,7 +800,7 @@ const useHistoryImport = () => {
     busy: progress !== null || inspecting,
     progress,
     status,
-    select: (next: File) => void select(next),
+    select: (next: ImportSource) => void select(next),
     cancel,
     toggle,
     toggleAll,
@@ -791,7 +823,26 @@ const ImportHistory = ({
 }) => {
   const t = useTranslate()
   const inputRef = useRef<HTMLInputElement>(null)
+  const folderRef = useRef<HTMLInputElement>(null)
   const { progress } = historyImport
+
+  /** 目录选择：webkitRelativePath 的首段是选中的根目录，剥掉后与归档内路径对齐。 */
+  const readDirectory = (files: FileList | null): ImportSource | null => {
+    const map = new Map<string, File>()
+    let root = ''
+    for (const file of Array.from(files ?? [])) {
+      const relative =
+        (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+      const segments = relative.split('/')
+      if (segments.length > 1) {
+        root ||= segments[0] ?? ''
+        map.set(segments.slice(1).join('/'), file)
+      } else {
+        map.set(relative, file)
+      }
+    }
+    return map.size > 0 ? directorySource(root || 'archive', map) : null
+  }
 
   return (
     <SettingCell
@@ -801,24 +852,36 @@ const ImportHistory = ({
       status={historyImport.status}
       action={
         <>
-          <Button
-            variant="outlined"
-            size="m"
-            className={clsx(styles.cellButton, styles.uploadButton)}
-            aria-busy={historyImport.busy}
-            aria-label={historyImport.busy ? t('historyImport') : undefined}
-            disabled={disabled}
-            onClick={() => inputRef.current?.click()}
-          >
-            {historyImport.busy ? (
-              <IconLoadingOutline16 />
-            ) : (
-              <>
-                <IconUploadOutline14 />
-                {t('upload')}
-              </>
-            )}
-          </Button>
+          <div className={styles.importActions}>
+            <Button
+              variant="outlined"
+              size="m"
+              className={clsx(styles.cellButton, styles.uploadButton)}
+              aria-busy={historyImport.busy}
+              aria-label={historyImport.busy ? t('historyImport') : undefined}
+              disabled={disabled}
+              onClick={() => inputRef.current?.click()}
+            >
+              {historyImport.busy ? (
+                <IconLoadingOutline16 />
+              ) : (
+                <>
+                  <IconUploadOutline14 />
+                  {t('upload')}
+                </>
+              )}
+            </Button>
+            <Button
+              variant="outlined"
+              size="m"
+              className={styles.cellButton}
+              disabled={disabled}
+              title={t('historyImportFolderHint')}
+              onClick={() => folderRef.current?.click()}
+            >
+              {t('historyImportFolder')}
+            </Button>
+          </div>
           <input
             ref={inputRef}
             type="file"
@@ -828,7 +891,21 @@ const ImportHistory = ({
               const file = event.target.files?.[0]
               event.target.value = ''
               if (file) {
-                historyImport.select(file)
+                historyImport.select(zipSource(file))
+              }
+            }}
+          />
+          <input
+            ref={folderRef}
+            type="file"
+            multiple
+            hidden
+            {...({ webkitdirectory: 'true', directory: 'true' } as Record<string, string>)}
+            onChange={(event) => {
+              const source = readDirectory(event.target.files)
+              event.target.value = ''
+              if (source) {
+                historyImport.select(source)
               }
             }}
           />
