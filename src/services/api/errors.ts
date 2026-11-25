@@ -114,3 +114,24 @@ export const getUploadErrorInfo = (error: unknown): UploadErrorInfo | null => {
   }
   return null
 }
+
+/** 上下文超限：服务端以 400/413 返回，文案措辞不统一，按特征短语识别。 */
+const CONTEXT_OVERFLOW_PATTERNS = [
+  /context[ _-]?(window|length)/i,
+  /maximum context length/i,
+  /input (is )?too long/i,
+  /prompt is too long/i,
+  /conversation is too long/i,
+  /too many (input )?tokens/i,
+  /exceed(s|ed)?[^.]*context/i,
+]
+
+export const isContextOverflowError = (error: unknown): boolean => {
+  if (!(error instanceof ApiError)) {
+    return false
+  }
+  if (error.status !== undefined && error.status !== 400 && error.status !== 413) {
+    return false
+  }
+  return CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(error.message))
+}

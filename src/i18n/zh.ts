@@ -123,10 +123,9 @@ export const zh = {
   compactNoSession: '请先进入一个对话',
   compactAttachments: '压缩命令不能携带附件',
   compactEmptySummary: '压缩结果为空，请重试',
-  compactSystemPrompt:
-    '你是一个对话压缩器。请把给定的对话历史压缩成一份紧凑、事实准确的摘要，供后续对话继续使用。\n要求：\n- 保留用户的身份、偏好、约束和明确要求；\n- 保留已确认的事实、关键结论、决策、未完成的任务和待确认的问题；\n- 保留重要的代码、文件名、URL、名称和数字，不要编造；\n- 去掉寒暄、重复内容和不影响后续对话的细节；\n- 使用与对话主要语言相同的语言，以 Markdown 输出；\n- 只输出摘要正文，不要添加解释、前言或结束语。',
   compactInstruction:
-    '请压缩下面的对话。若提供了「已有摘要」，请把它与新增对话合并成一份新的完整摘要。',
+    '请把上面的对话历史压缩成一份紧凑、事实准确的摘要，供后续对话继续使用。\n要求：\n- 保留用户的身份、偏好、约束和明确要求；\n- 保留已确认的事实、关键结论、决策、未完成的任务和待确认的问题；\n- 保留重要的代码、文件名、URL、名称和数字，不要编造；\n- 去掉寒暄、重复内容和不影响后续对话的细节；\n- 若 system 中已有「更早对话的压缩摘要」，把它与上面的新对话合并成一份完整摘要；\n- 使用与对话主要语言相同的语言，以 Markdown 输出；\n- 只输出摘要正文，不要添加解释、前言或结束语，也不要调用任何工具。',
+  compactNotSmaller: '压缩后的摘要没有让上下文变小，已取消本次压缩，请重试',
   avatarMenuSettingsDialogThemeItemLabel: '主题',
   avatarMenuSettingsDialogThemeSelectLightOption: '浅色',
   avatarMenuSettingsDialogThemeSelectDarkOption: '深色',

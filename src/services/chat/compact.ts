@@ -1,8 +1,8 @@
 import { ApiError, streamMessage } from '../api/client.js'
-import type { ChatModel, CreateMessageRequest, StopReason } from '../api/types.js'
+import type { ChatModel, CreateMessageRequest, MessageParam, StopReason } from '../api/types.js'
 import { translate } from '../../i18n/index.js'
-import { getReplyText } from './reply.js'
-import type { AssistantMessage, SessionCompaction, UserMessage } from './types.js'
+import { toRequestMessages } from './reply.js'
+import type { AssistantMessage, Message, SessionCompaction, UserMessage } from './types.js'
 
 export type CompactRound = [UserMessage, AssistantMessage]
 
@@ -62,68 +62,57 @@ export const planCompaction = (
   }
 }
 
-/** 阅读链接与正文引用里的来源；摘要里保留标题和 URL，避免丢失可追溯信息。 */
-const sourceLines = (reply: AssistantMessage): string[] => {
-  const sources = new Map<string, string>()
-  for (const block of reply.blocks) {
-    if (block.type === 'text') {
-      for (const citation of block.citations ?? []) {
-        sources.set(citation.url, citation.title ?? '')
-      }
-    } else if (
-      block.type === 'web_fetch_tool_result' &&
-      block.content.type === 'web_fetch_result'
-    ) {
-      sources.set(block.content.url, block.content.content.title ?? '')
-    }
+/** 压缩指令以一条普通提问的形式追加，正文由当前语言决定。 */
+const instructionMessage = (): UserMessage => ({
+  id: 'compaction-instruction',
+  role: 'user',
+  content: translate('compactInstruction'),
+  files: [],
+  createdAt: Date.now(),
+})
+
+/**
+ * 把待压缩的历史按正常请求的方式重放，末尾接上压缩指令。
+ * 与正式请求使用同一套 system、消息转换和工具声明，provider 的前缀缓存才能命中。
+ */
+export const buildCompactionMessages = (
+  history: Message[],
+  { upToId, previousUpToId }: { upToId: string; previousUpToId?: string }
+): MessageParam[] => {
+  const end = history.findIndex((message) => message.id === upToId)
+  if (end < 0) {
+    throw new ApiError('protocol', { key: 'compactFailed' })
   }
-  return [...sources].map(([url, title]) => (title ? `- ${title}: ${url}` : `- ${url}`))
+  const start = previousUpToId
+    ? history.findIndex((message) => message.id === previousUpToId) + 1
+    : 0
+  return toRequestMessages(history.slice(start, end + 1), instructionMessage(), undefined, false)
 }
 
-/** 把待压缩轮次转成纯文本；不包含思考与搜索结果，只保留正文、附件名和来源。 */
-export const buildCompactTranscript = (
-  rounds: CompactRound[],
-  previousSummary?: string
-): string => {
-  const parts: string[] = []
-  if (previousSummary) {
-    parts.push(`## Previous summary\n${previousSummary}`)
-  }
-  rounds.forEach(([user, reply], index) => {
-    const files = user.files.map((file) => file.name).join(', ')
-    parts.push(`## ${previousSummary ? 'New round' : 'Round'} ${index + 1}`)
-    parts.push(`User:${files ? ` [attachments: ${files}]` : ''}\n${user.content || '(no text)'}`)
-    parts.push(`Assistant:\n${getReplyText(reply).trim() || '(no text)'}`)
-    const sources = sourceLines(reply)
-    if (sources.length > 0) {
-      parts.push(`Sources:\n${sources.join('\n')}`)
-    }
-  })
-  return parts.join('\n\n')
-}
-
-/** 单独一次流式请求生成摘要；不携带工具，也不开启深度思考。 */
+/** 单独一次流式请求生成摘要；沿用正式请求的 system 与工具声明以复用前缀缓存。 */
 export const requestCompaction = async ({
   apiKey,
   model,
-  transcript,
+  system,
+  messages,
+  tools,
   safetyCheck,
   signal,
 }: {
   apiKey: string
   model: ChatModel
-  transcript: string
+  system: string
+  messages: MessageParam[]
+  tools: CreateMessageRequest['tools']
   safetyCheck: boolean
   signal: AbortSignal
 }): Promise<string> => {
   const body: CreateMessageRequest = {
     model,
-    system: translate('compactSystemPrompt'),
-    messages: [
-      { role: 'user', content: `${translate('compactInstruction')}\n\n${transcript}` },
-    ],
+    system,
+    messages,
     thinking: { type: 'disabled' },
-    tools: [],
+    tools,
     ...(safetyCheck ? { safety_check: { level: 'high' } } : {}),
   }
   let summary = ''

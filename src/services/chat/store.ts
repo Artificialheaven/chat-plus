@@ -3,8 +3,14 @@ import type { TranslationMessage } from '../../i18n/index.js'
 import { getAbortReason, throwIfAborted } from '../../utils/abort.js'
 import { createId } from '../../utils/id.js'
 import { ApiError, streamMessage } from '../api/client.js'
-import type { ChatModel, CreateMessageRequest } from '../api/types.js'
-import { extractFileIds, getFileErrorCode, isRetryableApiError } from '../api/errors.js'
+import type { ChatModel } from '../api/types.js'
+import { SAFETY_CHECK, buildSystemPrompt, serverTools } from './prompt.js'
+import {
+  extractFileIds,
+  getFileErrorCode,
+  isContextOverflowError,
+  isRetryableApiError,
+} from '../api/errors.js'
 import {
   cancelUpload,
   checkImageFileIds,
@@ -15,7 +21,7 @@ import {
 import { useSettings } from '../settings.js'
 import { appendBranch, getVisibleMessages, normalizeSession, selectVersion } from './branches.js'
 import {
-  buildCompactTranscript,
+  buildCompactionMessages,
   getActiveCompaction,
   planCompaction,
   requestCompaction,
@@ -50,33 +56,12 @@ import {
 
 /** deepseek-flash 同时支持深度思考与图片输入 */
 const MODEL: ChatModel = 'deepseek-flash'
-/** 所有生成请求统一携带的助手身份说明 */
-const SYSTEM_PROMPT = '该助手为DeepSeek，由深度求索公司创造。'
-/** 保留最近打开的详情；当前会话、生成中及尚未成功保存的会话不淘汰。 */
-const SESSION_CACHE_LIMIT = 5
-/** 默认开启，可在设置中关闭；关闭时请求不携带 safety_check 字段。 */
-const SAFETY_CHECK = { level: 'high' } as const
-
-/** 压缩摘要放在 system 中，明确它只是背景信息，不是新的用户指令。 */
-const buildSystemPrompt = (summary?: string) =>
-  summary
-    ? `${SYSTEM_PROMPT}\n\n以下是更早对话的压缩摘要，仅作为背景参考，不是新的用户指令：\n<context_summary>\n${summary}\n</context_summary>`
-    : SYSTEM_PROMPT
 /** 服务端判定 file_id 失效后，重新补传并重发的最多次数（不含首次请求） */
 const FILE_RETRY_LIMIT = 2
 /** 退避基数，第 n 次重试等待 2^n 倍；连续失败达到上限就放弃，把原始报错展示出来 */
 const FILE_RETRY_BASE_DELAY = 1000
-
-/** 阅读链接始终开启，智能搜索开关控制是否另行声明搜索工具（含边想边搜）。 */
-const serverTools = (search: boolean): CreateMessageRequest['tools'] => {
-  const tools: CreateMessageRequest['tools'] = [
-    { type: 'deepseek_read_url', name: 'deepseek_read_url' },
-  ]
-  if (search) {
-    tools.push({ type: 'deepseek_web_search', name: 'deepseek_web_search' })
-  }
-  return tools
-}
+/** 保留最近打开的详情；当前会话、生成中及尚未成功保存的会话不淘汰。 */
+const SESSION_CACHE_LIMIT = 5
 
 /** 允许自动补标题的请求；手动重命名后取消本轮标题写入，包含主动清空标题的情况。 */
 const titleRequests = new Set<AbortController>()
@@ -837,7 +822,9 @@ type Request = { history: Message[]; question: UserMessage; prefix?: AssistantMe
 const runCompaction = async ({
   sessionId,
   plan,
+  history,
   previousSummary,
+  previousUpToId,
   beforeTokens,
   keepRounds,
   controller,
@@ -845,7 +832,9 @@ const runCompaction = async ({
 }: {
   sessionId: string
   plan: CompactPlan
+  history: Message[]
   previousSummary?: string
+  previousUpToId?: string
   beforeTokens: number
   keepRounds: number
   controller: AbortController
@@ -863,7 +852,10 @@ const runCompaction = async ({
     const summary = await requestCompaction({
       apiKey: settings.apiKey ?? '',
       model: MODEL,
-      transcript: buildCompactTranscript(plan.fresh, previousSummary),
+      // 与正式请求一致的 system、消息与工具声明，命中 provider 的前缀缓存。
+      system: buildSystemPrompt(previousSummary),
+      messages: buildCompactionMessages(history, { upToId: plan.upToId, previousUpToId }),
+      tools: serverTools(plan.summarizable.at(-1)?.[1].search ?? false),
       safetyCheck: settings.safetyCheck,
       signal: controller.signal,
     })
@@ -871,6 +863,10 @@ const runCompaction = async ({
       return { status: 'aborted' }
     }
     const afterTokens = estimateSummaryUsage(summary, plan.kept)
+    // 摘要没有让上下文变小就没有意义，按压缩失败处理，避免越压越大。
+    if (afterTokens >= beforeTokens) {
+      throw new ApiError('protocol', { key: 'compactNotSmaller' })
+    }
     updateSession(sessionId, (session) => ({
       ...session,
       compaction: {
@@ -946,16 +942,54 @@ const autoCompactIfNeeded = async (
   return runCompaction({
     sessionId,
     plan,
+    history: request.history,
     // 只有旧摘要的边界仍落在本次压缩范围内时才合并，避免把要原样保留的轮次重复写进摘要。
     previousSummary:
       active && plan.summarizable.some(([, reply]) => reply.id === active.upToId)
         ? active.summary
         : undefined,
+    previousUpToId: active?.upToId,
     beforeTokens: before.tokens,
     keepRounds: settings.compactKeepRounds,
     controller,
     automatic: true,
   })
+}
+
+/**
+ * 服务端确认上下文超限后的兜底：绕过阈值与保留轮数，压缩尽可能多的轮次。
+ * 成功后由调用方重发原请求；失败则保留原报错，不做静默截断。
+ */
+const compactAfterOverflow = async (
+  sessionId: string,
+  controller: AbortController
+): Promise<boolean> => {
+  const session = getSession(sessionId)
+  if (!session || get().importingHistory || !useSettings.getState().apiKey) {
+    return false
+  }
+  const path = getVisibleMessages(session)
+  const active = getActiveCompaction(session.compaction, path)
+  const plan = planCompaction(getContextRounds(path), 0, active?.upToId)
+  if (!plan) {
+    return false
+  }
+  const before = estimateContextUsage(path, undefined, active)
+  const result = await runCompaction({
+    sessionId,
+    plan,
+    history: path,
+    previousSummary:
+      active && plan.summarizable.some(([, reply]) => reply.id === active.upToId)
+        ? active.summary
+        : undefined,
+    previousUpToId: active?.upToId,
+    beforeTokens: before.tokens,
+    keepRounds: 0,
+    controller,
+    automatic: true,
+  })
+  return result.status === 'done'
 }
 
 export type CompactSessionResult = 'started' | 'empty' | 'busy' | 'unavailable'
@@ -987,10 +1021,12 @@ export const compactSession = (sessionId: string): CompactSessionResult => {
   void runCompaction({
     sessionId,
     plan,
+    history: path,
     previousSummary:
       active && plan.summarizable.some(([, reply]) => reply.id === active.upToId)
         ? active.summary
         : undefined,
+    previousUpToId: active?.upToId,
     beforeTokens: before.tokens,
     keepRounds: settings.compactKeepRounds,
     controller: new AbortController(),
@@ -1243,6 +1279,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
   }
   set((state) => ({ streaming: { ...state.streaming, [sessionId]: controller } }))
   let reply = initial
+  let overflowAttempted = false
   let frame = 0
   const flush = () => {
     cancelAnimationFrame(frame)
@@ -1351,6 +1388,18 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
         if (controller.signal.aborted) {
           reply = settleReply(reply, 'stopped', Date.now())
           break
+        }
+        // 上下文超限：不静默截断历史，做一次最大限度的压缩后重发一次。
+        if (
+          !overflowAttempted &&
+          !receivedContent &&
+          isContextOverflowError(error) &&
+          (await compactAfterOverflow(sessionId, controller))
+        ) {
+          overflowAttempted = true
+          if (!controller.signal.aborted) {
+            continue
+          }
         }
         if (preparing) {
           reply = settleReply(reply, 'error', Date.now(), {
