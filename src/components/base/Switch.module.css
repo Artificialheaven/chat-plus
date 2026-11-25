@@ -1,0 +1,36 @@
+.switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background-color: var(--dsw-alias-interactive-bg-hover-accent);
+  cursor: pointer;
+  transition: background-color var(--ds-transition-duration) var(--ds-ease-in-out);
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.checked {
+  background-color: var(--dsw-alias-brand-primary);
+}
+
+.thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background-color: var(--dsw-static-neutral-bluish-00);
+  transition: transform var(--ds-transition-duration) var(--ds-ease-in-out);
+}
+
+.checked .thumb {
+  transform: translateX(16px);
+}

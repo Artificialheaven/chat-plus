@@ -1,14 +1,29 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { useIsMobile } from '../../app/viewport.js'
 import {
   buildMessageVersions,
   getVisibleMessages,
   type MessageVersions,
 } from '../../services/chat/branches.js'
-import { selectMessageVersion } from '../../services/chat/store.js'
+import { getActiveCompaction } from '../../services/chat/compact.js'
+import {
+  compactSession,
+  selectMessageVersion,
+  stopCompact,
+  useChatStore,
+} from '../../services/chat/store.js'
 import type { Session } from '../../services/chat/types.js'
 import { closeSearchPanel } from '../search/searchPanelState.js'
 import { AssistantMessage } from './AssistantMessage.js'
+import { CompactionMessage } from './CompactionMessage.js'
 import { ScrollToBottomContext } from './scrollContext.js'
 import { UserMessage } from './UserMessage.js'
 import type { Message } from '../../services/chat/types.js'
@@ -49,6 +64,10 @@ export const MessageList = ({
   const scrollTopRef = useRef(0)
   const restoreScrollRef = useRef<{ messageId: string; top: number } | null>(null)
   const messages = getVisibleMessages(session)
+  const compactTask = useChatStore((state) => state.compacting[session.id])
+  const compactError = useChatStore((state) => state.compactErrors[session.id])
+  const compaction = getActiveCompaction(session.compaction, messages)
+  const busy = streaming || Boolean(compactTask)
   const [previousVersions, setPreviousVersions] = useState(() =>
     buildMessageVersions(session, new Map())
   )
@@ -103,7 +122,7 @@ export const MessageList = ({
 
   const selectVersion = useCallback(
     (messageId: string, anchorTop: number) => {
-      if (streaming) {
+      if (busy) {
         return
       }
       restoreScrollRef.current = { messageId, top: anchorTop }
@@ -111,7 +130,7 @@ export const MessageList = ({
       closeSearchPanel()
       selectMessageVersion(session.id, messageId)
     },
-    [session.id, streaming]
+    [session.id, busy]
   )
 
   // 跨移动端断点时切换滚动层，并保持输入框及当前阅读位置。
@@ -140,38 +159,97 @@ export const MessageList = ({
   }, [isMobile, scrollToBottom])
 
   const lastIndex = messages.length - 1
-  const uploadRetryId = getUploadRetryId(messages, streaming)
+  const uploadRetryId = getUploadRetryId(messages, busy)
+
+  /** 压缩气泡挂在摘要边界之后；进行中和失败优先于已有摘要显示。 */
+  const renderCompaction = (messageId: string) => {
+    if (compactTask?.upToId === messageId) {
+      return (
+        <CompactionMessage
+          status="pending"
+          rounds={compactTask.rounds}
+          onStop={() => stopCompact(session.id)}
+        />
+      )
+    }
+    if (compactError?.upToId === messageId) {
+      return (
+        <CompactionMessage
+          status="error"
+          rounds={compactError.rounds}
+          error={compactError}
+          onRetry={() => void compactSession(session.id)}
+        />
+      )
+    }
+    if (compaction?.upToId === messageId) {
+      return (
+        <CompactionMessage
+          status="done"
+          summary={compaction.summary}
+          createdAt={compaction.createdAt}
+          rounds={compaction.rounds}
+          beforeTokens={compaction.beforeTokens}
+          afterTokens={compaction.afterTokens}
+        />
+      )
+    }
+    return null
+  }
+
+  const hasMessage = (messageId: string | undefined) =>
+    messageId !== undefined && messages.some((message) => message.id === messageId)
+  const orphanTask = compactTask && !hasMessage(compactTask.upToId) ? compactTask : undefined
+  const orphanError =
+    compactError && !hasMessage(compactError.upToId) ? compactError : undefined
+
   return (
     <ScrollToBottomContext.Provider value={scrollToBottom}>
       <div ref={isMobile ? undefined : scrollRef} className={styles.container}>
         <div ref={isMobile ? scrollRef : undefined} className={styles.scroll}>
           <div ref={contentRef} className={styles.column}>
-            {messages.map((message, index) =>
-              message.role === 'user' ? (
-                <UserMessage
-                  key={message.id}
-                  sessionId={session.id}
-                  message={message}
-                  retryUploadId={uploadRetryId}
-                  isFirst={index === 0}
-                  isLast={index === lastIndex || index === lastIndex - 1}
-                  busy={streaming}
-                  versions={versions.get(message.id) ?? EMPTY_VERSIONS}
-                  onSelectVersion={selectVersion}
-                />
-              ) : (
-                <AssistantMessage
-                  key={message.id}
-                  sessionId={session.id}
-                  message={message}
-                  isLast={index === lastIndex}
-                  streaming={streaming && index === lastIndex}
-                  busy={streaming}
-                  versions={versions.get(message.id) ?? EMPTY_VERSIONS}
-                  onSelectVersion={selectVersion}
-                />
-              )
-            )}
+            {messages.map((message, index) => (
+              <Fragment key={message.id}>
+                {message.role === 'user' ? (
+                  <UserMessage
+                    sessionId={session.id}
+                    message={message}
+                    retryUploadId={uploadRetryId}
+                    isFirst={index === 0}
+                    isLast={index === lastIndex || index === lastIndex - 1}
+                    busy={busy}
+                    versions={versions.get(message.id) ?? EMPTY_VERSIONS}
+                    onSelectVersion={selectVersion}
+                  />
+                ) : (
+                  <AssistantMessage
+                    sessionId={session.id}
+                    message={message}
+                    isLast={index === lastIndex}
+                    streaming={streaming && index === lastIndex}
+                    busy={busy}
+                    versions={versions.get(message.id) ?? EMPTY_VERSIONS}
+                    onSelectVersion={selectVersion}
+                  />
+                )}
+                {renderCompaction(message.id)}
+              </Fragment>
+            ))}
+            {orphanTask ? (
+              <CompactionMessage
+                status="pending"
+                rounds={orphanTask.rounds}
+                onStop={() => stopCompact(session.id)}
+              />
+            ) : null}
+            {orphanError ? (
+              <CompactionMessage
+                status="error"
+                rounds={orphanError.rounds}
+                error={orphanError}
+                onRetry={() => void compactSession(session.id)}
+              />
+            ) : null}
           </div>
         </div>
         {footer}

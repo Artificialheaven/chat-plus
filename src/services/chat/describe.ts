@@ -28,6 +28,20 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
     if (kind === 'upload') {
       return { text: message || translate('uploadFileStatusFailed') }
     }
+    if (kind === 'compact') {
+      switch (classifyStatus(status)) {
+        case 'unauthorized':
+          return { text: translate('replyInvalidApiKey'), action: 'apiKey' }
+        case 'insufficientBalance':
+          return { text: translate('replyInsufficientBalance'), action: 'topUp' }
+        case 'rateLimited':
+          return { text: translate('replyRateLimited') }
+        case 'serverBusy':
+          return { text: translate('completionServerBusyToast') }
+        default:
+          return { text: message || translate('compactFailed') }
+      }
+    }
     if (kind === 'network') {
       return { text: translate('commonNetworkErrorToast') }
     }

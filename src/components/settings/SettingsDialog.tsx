@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   IconDarkOutline16,
   IconDataOutline16,
@@ -8,6 +8,7 @@ import {
   IconLightOutline16,
   IconLoadingOutline16,
   IconSettingsOutline16,
+  IconThinkOutline16,
   IconUploadOutline14,
 } from '../base/icons.js'
 import {
@@ -20,9 +21,18 @@ import { useIsMobile } from '../../app/viewport.js'
 import { useChatStore } from '../../services/chat/store.js'
 import { regionCodes, getRegionName, provinces } from '../../services/location.js'
 import {
+  MAX_COMPACT_KEEP_ROUNDS,
+  MAX_CONTEXT_LIMIT,
+  MIN_CONTEXT_LIMIT,
   isChineseBrowser,
+  resetContextSettings,
+  setAutoCompact,
+  setCompactKeepRounds,
+  setCompactThreshold,
+  setContextLimit,
   setLocale,
   setLocation,
+  setSafetyCheck,
   setThemePreference,
   setTtsVoice,
   useSettings,
@@ -32,6 +42,7 @@ import { useTranslate, type TranslationKey, type TranslationMessage } from '../.
 import { Button } from '../base/Button.js'
 import { Modal } from '../base/Modal.js'
 import { Select } from '../base/Select.js'
+import { Switch } from '../base/Switch.js'
 import { showToast } from '../base/toastState.js'
 import { ApiKeyConfirm, ApiKeyField, useApiKeyEditor } from './ApiKeyField.js'
 import { closeSettings, useSettingsDialog, type SettingsSection } from './settingsDialogState.js'
@@ -52,6 +63,11 @@ const sections: { value: SettingsSection; label: TranslationKey; icon: ReactNode
     value: 'general',
     label: 'settingDialogAsideGeneralOptionLabel',
     icon: <IconSettingsOutline16 />,
+  },
+  {
+    value: 'chat',
+    label: 'settingDialogAsideChatOptionLabel',
+    icon: <IconThinkOutline16 />,
   },
   { value: 'data', label: 'settingDialogAsideDataOptionLabel', icon: <IconDataOutline16 /> },
 ]
@@ -107,6 +123,8 @@ const SettingsContent = ({
               <TtsVoiceSetting />
               <LocationSetting />
             </>
+          ) : section === 'chat' ? (
+            <ChatSettings />
           ) : (
             <>
               <ApiKeyField editor={apiKeyEditor} />
@@ -317,6 +335,152 @@ const TtsVoiceSetting = () => {
         />
       }
     />
+  )
+}
+
+const SwitchSetting = ({
+  label,
+  description,
+  checked,
+  onChange,
+}: {
+  label: string
+  description: string
+  checked: boolean
+  onChange: (checked: boolean) => void
+}) => (
+  <SettingCell
+    label={label}
+    description={description}
+    status={null}
+    action={<Switch checked={checked} onChange={onChange} ariaLabel={label} />}
+  />
+)
+
+/** 数字设置：输入过程中不落盘，失焦或回车时校验并提交。 */
+const NumberSetting = ({
+  label,
+  description,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+}: {
+  label: string
+  description: string
+  value: number
+  min: number
+  max: number
+  step: number
+  onChange: (value: number) => void
+}) => {
+  const t = useTranslate()
+  const [draft, setDraft] = useState(String(value))
+
+  useEffect(() => {
+    setDraft(String(value))
+  }, [value])
+
+  const commit = () => {
+    const parsed = Number(draft)
+    if (draft.trim() === '' || !Number.isFinite(parsed)) {
+      setDraft(String(value))
+      return
+    }
+    const next = Math.min(max, Math.max(min, Math.round(parsed)))
+    setDraft(String(next))
+    onChange(next)
+  }
+
+  return (
+    <SettingCell
+      label={label}
+      description={description}
+      status={null}
+      action={
+        <div className={styles.numberField}>
+          <input
+            className={styles.numberInput}
+            type="number"
+            inputMode="numeric"
+            aria-label={label}
+            value={draft}
+            min={min}
+            max={max}
+            step={step}
+            onChange={(event) => setDraft(event.target.value)}
+            onBlur={commit}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                commit()
+              }
+            }}
+          />
+          <span className={styles.unit}>{t('settingsTokenUnit')}</span>
+        </div>
+      }
+    />
+  )
+}
+
+/** 安全审核与上下文压缩；默认值与设置层保持一致。 */
+const ChatSettings = () => {
+  const t = useTranslate()
+  const safetyCheck = useSettings((state) => state.safetyCheck)
+  const autoCompact = useSettings((state) => state.autoCompact)
+  const contextLimit = useSettings((state) => state.contextLimit)
+  const compactThreshold = useSettings((state) => state.compactThreshold)
+  const compactKeepRounds = useSettings((state) => state.compactKeepRounds)
+
+  return (
+    <>
+      <SwitchSetting
+        label={t('settingsSafetyCheck')}
+        description={t('settingsSafetyCheckDescription')}
+        checked={safetyCheck}
+        onChange={setSafetyCheck}
+      />
+      <SwitchSetting
+        label={t('settingsAutoCompact')}
+        description={t('settingsAutoCompactDescription')}
+        checked={autoCompact}
+        onChange={setAutoCompact}
+      />
+      <NumberSetting
+        label={t('settingsContextLimit')}
+        description={t('settingsContextLimitDescription')}
+        value={contextLimit}
+        min={MIN_CONTEXT_LIMIT}
+        max={MAX_CONTEXT_LIMIT}
+        step={1000}
+        onChange={setContextLimit}
+      />
+      <NumberSetting
+        label={t('settingsCompactThreshold')}
+        description={t('settingsCompactThresholdDescription')}
+        value={compactThreshold}
+        min={1}
+        max={contextLimit - 1}
+        step={1000}
+        onChange={setCompactThreshold}
+      />
+      <NumberSetting
+        label={t('settingsCompactKeepRounds')}
+        description={t('settingsCompactKeepRoundsDescription')}
+        value={compactKeepRounds}
+        min={0}
+        max={MAX_COMPACT_KEEP_ROUNDS}
+        step={1}
+        onChange={setCompactKeepRounds}
+      />
+      <div className={styles.contextActions}>
+        <Button variant="outlined" size="m" onClick={resetContextSettings}>
+          {t('settingsRestoreContextDefaults')}
+        </Button>
+      </div>
+    </>
   )
 }
 

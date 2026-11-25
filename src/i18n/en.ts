@@ -98,7 +98,42 @@ export const en = {
   settingsLocationCity: 'Select city',
   settingsLocationRegion: 'Select country or region',
   settingDialogAsideGeneralOptionLabel: 'General',
+  settingDialogAsideChatOptionLabel: 'Chat & context',
   settingDialogAsideDataOptionLabel: 'Data',
+  settingsSafetyCheck: 'Safety check',
+  settingsSafetyCheckDescription:
+    'When on, requests include high-level safety_check. When off, the field is omitted.',
+  settingsAutoCompact: 'Auto-compact context',
+  settingsAutoCompactDescription:
+    'Estimate context usage before sending; when the threshold is reached, older rounds are compacted first.',
+  settingsContextLimit: 'Context limit',
+  settingsContextLimitDescription:
+    'In tokens. Default 1,000,000. Used for usage estimates and threshold validation.',
+  settingsCompactThreshold: 'Trigger threshold',
+  settingsCompactThresholdDescription:
+    'In tokens. Default 900,000. Must be lower than the context limit.',
+  settingsCompactKeepRounds: 'Rounds kept after compaction',
+  settingsCompactKeepRoundsDescription:
+    'Recent rounds kept verbatim outside the summary. Default 3.',
+  settingsTokenUnit: 'tokens',
+  settingsRestoreContextDefaults: 'Restore defaults',
+  compactLabel: 'Context summary',
+  compactRunning: 'Compacting context...',
+  compactRunningDescription: 'Compacting {count} earlier rounds into a summary',
+  compactDone: 'Context compacted',
+  compactSummaryMeta: '{rounds} rounds summarized · about {before} → {after} tokens',
+  compactStop: 'Stop compacting',
+  compactFailed: 'Failed to compact context. Please try again.',
+  compactFailedWithReason: 'Failed to compact context: {message}',
+  compactBusy: 'A reply or compaction is already running. Please wait.',
+  compactNothing: 'There is nothing to compact.',
+  compactNoSession: 'Open a conversation first.',
+  compactAttachments: 'The compact command cannot be used with attachments.',
+  compactEmptySummary: 'The summary was empty. Please try again.',
+  compactSystemPrompt:
+    'You are a conversation compressor. Compress the given conversation history into a compact, factually accurate summary that can be used to continue the conversation.\nRequirements:\n- Keep the user\'s identity, preferences, constraints, and explicit requests;\n- Keep confirmed facts, key conclusions, decisions, unfinished tasks, and open questions;\n- Keep important code, file names, URLs, names, and numbers; do not invent details;\n- Remove greetings, repetition, and details that do not affect future conversation;\n- Use the main language of the conversation and output Markdown;\n- Output only the summary body, with no explanation, preamble, or closing remark.',
+  compactInstruction:
+    'Compress the conversation below. If a "Previous summary" is provided, merge it with the new conversation into one complete summary.',
   avatarMenuSettingsDialogThemeItemLabel: 'Theme',
   avatarMenuSettingsDialogThemeSelectLightOption: 'Light',
   avatarMenuSettingsDialogThemeSelectDarkOption: 'Dark',

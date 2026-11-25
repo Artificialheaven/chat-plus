@@ -9,9 +9,16 @@ import {
 } from '../base/icons.js'
 import { setSearch, setThinking, useSettings } from '../../services/settings.js'
 import { useIsMobile } from '../../app/viewport.js'
-import { sendMessage, stopReply, useChatStore } from '../../services/chat/store.js'
+import {
+  compactSession,
+  sendMessage,
+  stopCompact,
+  stopReply,
+  useChatStore,
+} from '../../services/chat/store.js'
 import {
   addDraftFiles,
+  clearDraft,
   EMPTY_DRAFT,
   getDraft,
   prepareDraftMessage,
@@ -49,6 +56,10 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   const streaming = useChatStore(
     (state) => sessionId !== null && Object.hasOwn(state.streaming, sessionId)
   )
+  const compacting = useChatStore(
+    (state) => sessionId !== null && Object.hasOwn(state.compacting, sessionId)
+  )
+  const busy = streaming || compacting
   const thinking = useSettings((state) => state.thinking)
   const importingHistory = useChatStore((state) => state.importingHistory)
   const isMobile = useIsMobile()
@@ -130,26 +141,55 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   const recording = voice.status === 'recording'
 
   // 排队、上传中或上传失败的附件都留在输入框，全部上传成功后才能发送
-  const canSend = !importingHistory && !streaming && voice.status === 'idle' && draftReady
+  const canSend = !importingHistory && !busy && voice.status === 'idle' && draftReady
 
-  const send = () => {
-    if (
-      useChatStore.getState().importingHistory ||
-      voice.status !== 'idle' ||
-      !prepareDraftMessage(getDraft(sessionId), useUploads.getState().tasks)
-    ) {
-      return
-    }
-    // 文本与上传完成态由提交动作读取最新快照，不使用上一次渲染的草稿。
-    if (!ensureApiKey() || !sendMessage(sessionId)) {
-      return
-    }
-    stopReadAloud()
+  const focusInput = () => {
     if (isMobile) {
       textareaRef.current?.blur()
     } else {
       textareaRef.current?.focus()
     }
+  }
+
+  const send = () => {
+    if (useChatStore.getState().importingHistory || voice.status !== 'idle' || busy) {
+      return
+    }
+    // 文本与上传完成态由提交动作读取最新快照，不使用上一次渲染的草稿。
+    const currentDraft = getDraft(sessionId)
+    // /compact 在发送请求前拦截：不追加消息，直接压缩当前分支的上下文。
+    if (currentDraft.text.trim() === '/compact') {
+      if (currentDraft.attachments.length > 0) {
+        showToast({ key: 'compactAttachments', type: 'error' })
+        return
+      }
+      if (sessionId === null) {
+        showToast({ key: 'compactNoSession', type: 'error' })
+        return
+      }
+      if (!ensureApiKey()) {
+        return
+      }
+      const result = compactSession(sessionId)
+      if (result === 'started') {
+        clearDraft(sessionId)
+        stopReadAloud()
+        focusInput()
+      } else if (result === 'empty') {
+        showToast({ key: 'compactNothing', type: 'error' })
+      } else if (result === 'busy') {
+        showToast({ key: 'compactBusy', type: 'error' })
+      }
+      return
+    }
+    if (!prepareDraftMessage(currentDraft, useUploads.getState().tasks)) {
+      return
+    }
+    if (!ensureApiKey() || !sendMessage(sessionId)) {
+      return
+    }
+    stopReadAloud()
+    focusInput()
   }
 
   return (
@@ -260,14 +300,18 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
               event.target.value = ''
             }}
           />
-          {streaming && sessionId ? (
+          {busy && sessionId ? (
             <button
               type="button"
               className={styles.sendButton}
-              aria-label={t('chatInputStopButtonTooltip')}
+              aria-label={compacting ? t('compactStop') : t('chatInputStopButtonTooltip')}
               onClick={() => {
                 stopReadAloud()
-                stopReply(sessionId)
+                if (streaming) {
+                  stopReply(sessionId)
+                } else {
+                  stopCompact(sessionId)
+                }
               }}
             >
               <IconStopFill16 />

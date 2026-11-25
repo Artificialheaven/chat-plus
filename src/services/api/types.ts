@@ -178,7 +178,8 @@ export type CreateMessageRequest = {
   messages: MessageParam[]
   thinking: { type: 'enabled' | 'disabled' }
   tools: (DeepseekWebSearchTool | DeepseekReadUrlTool)[]
-  safety_check: { level: 'high' }
+  /** 设置 high 时进入扩展模式；关闭安全审核时省略该字段。 */
+  safety_check?: { level: 'high' }
   title?: { enabled: boolean }
 }
 

@@ -95,14 +95,28 @@ export type AssistantMessage = MessageBranch & {
   /** 最近一次请求的用量，续写后更新 */
   usage?: MessageUsage
   error?: {
-    /** upload：发送前补传附件失败，请求没有发出 */
-    kind: ApiErrorKind | 'upload'
+    /** upload：发送前补传附件失败；compact：发送前自动压缩上下文失败 */
+    kind: ApiErrorKind | 'upload' | 'compact'
     message: string
     status?: number
     localMessage?: TranslationMessage
     /** 仅 upload：重新上传是否可能成功（网络、限流、服务端繁忙）；过大、格式不支持为 false */
     retryable?: boolean
   }
+}
+
+/** 仅改变后续请求的上下文，不删除本地消息；绑定当前分支上的压缩边界。 */
+export type SessionCompaction = {
+  summary: string
+  createdAt: number
+  /** 摘要覆盖到的最后一条消息；不在当前分支时忽略该记录。 */
+  upToId: string
+  /** 压缩时保留的轮数快照。 */
+  keepRounds: number
+  /** 摘要覆盖的轮次数，用于展示。 */
+  rounds: number
+  beforeTokens: number
+  afterTokens: number
 }
 
 export type Message = UserMessage | AssistantMessage
@@ -116,6 +130,8 @@ export type Session = {
   messages: Message[]
   /** undefined 表示线性消息列表；null 表示空会话。 */
   rootMessageId?: string | null
+  /** 当前分支的上下文压缩记录；导入的历史不包含该字段。 */
+  compaction?: SessionCompaction
 }
 
 /** 会话列表元数据；消息只在打开会话时加载。 */
