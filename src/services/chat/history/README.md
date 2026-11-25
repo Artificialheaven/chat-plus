@@ -19,9 +19,10 @@ chat_sessions/{session_id}_files/{file_id}_{file_name}  全部图片原件
 
 ## 导入与替换
 
-1. 用户确认覆盖后，先读取首个条目检查格式与版本；不符合时直接失败，不中止正在生成的回答。
-2. 检查通过后停止生成，导入期间禁止修改会话。逐条解析会话并写入 IndexedDB 暂存区，按 `FILE.is_image` 保留图片身份，再读取图片原件并回填 MIME。图片按文件 ID 去重；字节识别仅补充具体 MIME，无法识别时仍按图片处理。
-3. 校验索引与会话一一对应、消息树和 ZIP 完整性后，在同一个事务中用暂存内容替换全部本地会话与附件。校验或提交失败时保留原有记录；中断遗留的暂存在下次导入前清理。
+1. 选中文件后先做归档探查：只读 ZIP 目录、`manifest.json` 与 `chat_session_index.json`，列出会话标题、消息数与体积供勾选（默认全选，可单选、可全选/全不选）。会话 JSON 与图片原件此时不解压，因此大归档也能很快出列表，见 [inspectArchive.ts](./inspectArchive.ts)。
+2. 确认覆盖后，先读取首个条目检查格式与版本；不符合时直接失败，不中止正在生成的回答。
+3. 检查通过后停止生成，导入期间禁止修改会话，只导入选中的会话：未选中会话的 JSON 与附件既不解析也不做 CRC 校验。逐条解析会话并写入 IndexedDB 暂存区，按 `FILE.is_image` 保留图片身份，再读取图片原件并回填 MIME。图片按文件 ID 去重；字节识别仅补充具体 MIME，无法识别时仍按图片处理。
+4. 校验索引与会话一一对应、消息树和 ZIP 完整性后，在同一个事务中用暂存内容替换全部本地会话与附件。校验或提交失败时保留原有记录；中断遗留的暂存在下次导入前清理。
 
 消息树以 `id` / `parent_id` 还原，父消息 ID 必须小于子消息 ID、角色交替、根为提问。`current_message_id` 决定当前分支；其他节点默认选中 ID 最大的子消息。缺失原件的附件保留文件名和大小，不进入后续请求；有原件的导入图片在首次用于请求时上传。
 
@@ -52,9 +53,9 @@ chat_sessions/{session_id}_files/{file_id}_{file_name}  全部图片原件
 
 | 文件                                                                           | 职责                           |
 | ------------------------------------------------------------------------------ | ------------------------------ |
-| [format.ts](./format.ts)、[schema.ts](./schema.ts)                             | 归档类型与字段校验             |
+| [format.ts](./format.ts)、[schema.ts](./schema.ts)、[entryJson.ts](./entryJson.ts) | 归档类型、字段校验与条目 JSON 读取 |
 | [toLocal.ts](./toLocal.ts)、[toArchive.ts](./toArchive.ts)                     | 归档与本地消息转换             |
-| [importArchive.ts](./importArchive.ts)、[exportArchive.ts](./exportArchive.ts) | 条目读取、暂存与归档组装       |
+| [importArchive.ts](./importArchive.ts)、[inspectArchive.ts](./inspectArchive.ts) | 条目读取（含按会话选择性导入）、导入前探查 |
 | [zipReader.ts](./zipReader.ts)、[zipWriter.ts](./zipWriter.ts)                 | ZIP 读写及路径、大小、CRC 校验 |
 | [../backup.ts](../backup.ts)                                                   | 导入导出入口与串行队列         |
 

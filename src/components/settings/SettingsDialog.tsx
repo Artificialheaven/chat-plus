@@ -16,6 +16,8 @@ import {
   clearHistory,
   exportHistory,
   importHistory,
+  inspectHistory,
+  type ArchiveInspection,
 } from '../../services/chat/backup.js'
 import { useIsMobile } from '../../app/viewport.js'
 import { useChatStore } from '../../services/chat/store.js'
@@ -39,7 +41,9 @@ import {
   type ThemePreference,
 } from '../../services/settings.js'
 import { useTranslate, type TranslationKey, type TranslationMessage } from '../../i18n/index.js'
+import { formatDate } from '../../utils/format.js'
 import { Button } from '../base/Button.js'
+import { Checkbox } from '../base/Checkbox.js'
 import { Modal } from '../base/Modal.js'
 import { Select } from '../base/Select.js'
 import { Switch } from '../base/Switch.js'
@@ -150,7 +154,7 @@ const SettingsContent = ({
           )}
         </div>
       </Modal>
-      {historyImport.file ? <ImportConfirm historyImport={historyImport} /> : null}
+      {historyImport.inspection ? <ImportSelectionDialog historyImport={historyImport} /> : null}
       {historyDelete.opened ? <DeleteAllConfirm historyDelete={historyDelete} /> : null}
     </>
   )
@@ -484,30 +488,97 @@ const ChatSettings = () => {
   )
 }
 
-/** 覆盖导入的二次确认，叠在设置弹窗上 */
-const ImportConfirm = ({
+/** 归档体积展示：不足 1 MB 时按 KB 取整，避免出现 0 KB。 */
+const formatBytes = (bytes: number): string =>
+  bytes >= 1024 * 1024
+    ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(bytes / 1024))} KB`
+
+/** 导入前勾选会话；列表来自只读索引的探查结果，不解压会话正文。叠在设置弹窗上。 */
+const ImportSelectionDialog = ({
   historyImport,
 }: {
   historyImport: ReturnType<typeof useHistoryImport>
 }) => {
   const t = useTranslate()
+  const { inspection, selected } = historyImport
+  if (!inspection) {
+    return null
+  }
+  const total = inspection.sessions.length
+  const allSelected = total > 0 && selected.size === total
+  const partiallySelected = selected.size > 0 && !allSelected
   return (
     <Modal
-      title={t('historyImportConfirmTitle')}
-      className={styles.importConfirm}
+      title={t('historyImportSelectTitle')}
+      className={styles.importSelection}
+      mainClassName={styles.importSelectionMain}
       onClose={historyImport.cancel}
       footer={
         <>
           <Button variant="outlined" size="m" autoFocus onClick={historyImport.cancel}>
             {t('cancel')}
           </Button>
-          <Button variant="dangerOutlined" size="m" onClick={() => void historyImport.confirm()}>
-            {t('historyImportConfirm')}
+          <Button
+            variant="dangerOutlined"
+            size="m"
+            disabled={selected.size === 0}
+            onClick={() => void historyImport.confirm()}
+          >
+            {t('historyImportSelectedCount', { count: selected.size })}
           </Button>
         </>
       }
     >
-      <div className={styles.importConfirmText}>{t('historyImportConfirmDescription')}</div>
+      <div className={styles.importSelectionHint}>{t('historyImportSelectionHint')}</div>
+      {total === 0 ? (
+        <div className={styles.importSelectionHint}>{t('historyImportEmpty')}</div>
+      ) : (
+        <>
+          <div className={styles.importSelectAll}>
+            <Checkbox
+              checked={allSelected}
+              indeterminate={partiallySelected}
+              onChange={historyImport.toggleAll}
+              ariaLabel={t('historyImportSelectAll')}
+            />
+            <span className={styles.importSelectAllLabel}>{t('historyImportSelectAll')}</span>
+            <span className={styles.importSelectionCount}>
+              {selected.size} / {total}
+            </span>
+          </div>
+          <ul className={styles.importList}>
+            {inspection.sessions.map((session) => {
+              const checked = selected.has(session.id)
+              const label = session.title || t('untitledChat')
+              const date = formatDate(session.updatedAt)
+              return (
+                <li key={session.id} className={styles.importItem}>
+                  <Checkbox
+                    checked={checked}
+                    onChange={(next) => historyImport.toggle(session.id, next)}
+                    ariaLabel={label}
+                  />
+                  <button
+                    type="button"
+                    className={styles.importItemBody}
+                    onClick={() => historyImport.toggle(session.id, !checked)}
+                  >
+                    <span className={styles.importItemTitle}>{label}</span>
+                    <span className={styles.importItemMeta}>
+                      {t('historyImportItemMeta', {
+                        messages: session.messageCount,
+                        size: formatBytes(session.bytes),
+                      })}
+                      {date ? ` · ${date}` : ''}
+                    </span>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        </>
+      )}
     </Modal>
   )
 }
@@ -606,28 +677,82 @@ const SettingCell = ({
   )
 }
 
-/** 选文件后先提示覆盖；确认后才检查文件并执行导入，任何错误都提示导入失败。 */
+/** 选文件后只读目录与索引出勾选列表；确认后按选中会话覆盖导入，任何错误都提示导入失败。 */
 const useHistoryImport = () => {
   const [file, setFile] = useState<File | null>(null)
+  const [inspection, setInspection] = useState<ArchiveInspection | null>(null)
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
+  const [inspecting, setInspecting] = useState(false)
   const [progress, setProgress] = useState<{ processed: number; total?: number } | null>(null)
   const [status, setStatus] = useState<Status>(null)
   const importing = useRef(false)
 
+  const reset = () => {
+    setInspection(null)
+    setSelected(new Set())
+  }
+
+  /** 只解压 manifest 与索引列出会话，默认全选；失败时清掉文件并提示原因。 */
+  const select = async (next: File) => {
+    if (inspecting || importing.current) {
+      return
+    }
+    setStatus(null)
+    reset()
+    setFile(next)
+    setInspecting(true)
+    try {
+      const archive = await inspectHistory(next)
+      setInspection(archive)
+      setSelected(new Set(archive.sessions.map((session) => session.id)))
+    } catch (error) {
+      setFile(null)
+      setStatus(errorStatus('historyImportFailed', error))
+    } finally {
+      setInspecting(false)
+    }
+  }
+
+  const toggle = (id: string, checked: boolean) => {
+    setSelected((current) => {
+      const next = new Set(current)
+      if (checked) {
+        next.add(id)
+      } else {
+        next.delete(id)
+      }
+      return next
+    })
+  }
+
+  const toggleAll = (checked: boolean) => {
+    setSelected(new Set(checked ? (inspection?.sessions.map((session) => session.id) ?? []) : []))
+  }
+
+  const cancel = () => {
+    reset()
+    setFile(null)
+  }
+
   const confirm = async () => {
-    if (!file || importing.current) {
+    if (!file || importing.current || selected.size === 0) {
       return
     }
     importing.current = true
-    setFile(null)
+    const sessionIds = selected
+    reset()
     setProgress({ processed: 0 })
     setStatus(null)
     try {
-      const count = await importHistory(file, (processed, total) =>
-        setProgress({ processed, total })
-      )
+      const count = await importHistory(file, {
+        sessionIds,
+        onProgress: (processed, total) => setProgress({ processed, total }),
+      })
+      setFile(null)
       setStatus({ key: count === 1 ? 'historyImportedOne' : 'historyImported', params: { count } })
-    } catch {
-      setStatus({ key: 'historyImportFailed', error: true })
+    } catch (error) {
+      setFile(null)
+      setStatus(errorStatus('historyImportFailed', error))
     } finally {
       importing.current = false
       setProgress(null)
@@ -636,12 +761,18 @@ const useHistoryImport = () => {
 
   return {
     file,
-    busy: progress !== null,
+    inspection,
+    selected,
+    inspecting,
+    busy: progress !== null || inspecting,
     progress,
     status,
-    select: setFile,
-    cancel: () => setFile(null),
+    select: (next: File) => void select(next),
+    cancel,
+    toggle,
+    toggleAll,
     dismiss: () => {
+      reset()
       setFile(null)
       setStatus(null)
     },
@@ -678,7 +809,7 @@ const ImportHistory = ({
             disabled={disabled}
             onClick={() => inputRef.current?.click()}
           >
-            {progress ? (
+            {historyImport.busy ? (
               <IconLoadingOutline16 />
             ) : (
               <>

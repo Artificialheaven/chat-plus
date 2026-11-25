@@ -1,8 +1,16 @@
 import * as db from '../db.js'
 import type { Session } from '../types.js'
 import { BackupError, fail } from './errors.js'
+import { readJsonEntry } from './entryJson.js'
 import type { SessionIndexEntry } from './format.js'
-import { INDEX_PATH, MANIFEST_PATH, USER_PATH, parseSessionPath, sessionFilesDir } from './paths.js'
+import {
+  INDEX_PATH,
+  MANIFEST_PATH,
+  USER_PATH,
+  parseFilesPath,
+  parseSessionPath,
+  sessionFilesDir,
+} from './paths.js'
 import { checkManifest, readSessionFile, readSessionIndex } from './schema.js'
 import { toLocalSession } from './toLocal.js'
 import {
@@ -16,7 +24,11 @@ import {
 
 export type ImportProgressCallback = (processed: number, total: number) => void
 
-const fileOwner = (path: string) => /^chat_sessions\/([^/]+)_files\//.exec(path)?.[1]
+export type ImportArchiveOptions = {
+  onProgress?: ImportProgressCallback
+  /** 只导入这些会话；缺省时导入归档内的全部会话 */
+  sessionIds?: ReadonlySet<string>
+}
 
 /** 从原件字节补充图片 MIME；无法识别时为空字符串，图片身份仍由归档的 is_image 决定。 */
 const imageType = (bytes: Uint8Array): string => {
@@ -46,20 +58,6 @@ const imageType = (bytes: Uint8Array): string => {
   return ''
 }
 
-const readJson = async (entry: ArchiveEntry): Promise<unknown> => {
-  const decoder = new TextDecoder('utf-8')
-  let text = ''
-  for await (const chunk of entry.stream) {
-    text += decoder.decode(chunk, { stream: true })
-  }
-  text += decoder.decode()
-  try {
-    return JSON.parse(text)
-  } catch {
-    return fail('backupInvalidJson')
-  }
-}
-
 /**
  * 检查 ZIP 格式、首个 manifest 条目及格式版本。
  * 校验失败时保留正在生成的回答和现有暂存数据。
@@ -73,7 +71,7 @@ export const checkArchiveFormat = async (file: File): Promise<void> => {
       if (entry.path !== MANIFEST_PATH) {
         fail('backupUnrecognized')
       }
-      checkManifest(await readJson(entry))
+      checkManifest(await readJsonEntry(entry))
       return
     }
   } catch (error) {
@@ -85,15 +83,18 @@ export const checkArchiveFormat = async (file: File): Promise<void> => {
 /**
  * 按会话读取 JSON 和对应文件，保留归档物理顺序的格式校验。
  * 也支持会话与图片交错排列、index 位于末尾的条目顺序。
+ * 提供 sessionIds 时只解压这些会话及其附件，未选中的会话完全跳过，不做 CRC 校验。
  * 写入导入暂存存储；调用方负责先清空暂存，成功后替换正式数据，失败时清理暂存。
  */
 export const importArchive = async (
   file: File,
-  onProgress?: ImportProgressCallback
+  options: ImportArchiveOptions = {}
 ): Promise<void> => {
   if (!(await isZipFile(file))) {
     fail('backupUnrecognized')
   }
+  const { onProgress, sessionIds: selection } = options
+  const wanted = (id: string) => selection === undefined || selection.has(id)
   const imported = new Set<string>()
   const firstImageOffset = new Map<string, number>()
   const fileSessions = new Map<string, Set<string>>()
@@ -158,9 +159,14 @@ export const importArchive = async (
       entries.push(entry)
       const id = parseSessionPath(entry.path)
       if (id !== null) {
-        filesBySession.set(id, [])
+        if (wanted(id)) {
+          filesBySession.set(id, [])
+        }
       } else {
-        filesBySession.get(fileOwner(entry.path) ?? '')?.push(entry)
+        const owner = parseFilesPath(entry.path)
+        if (owner !== null) {
+          filesBySession.get(owner)?.push(entry)
+        }
       }
     }
     totalSessions = filesBySession.size
@@ -172,16 +178,24 @@ export const importArchive = async (
         if (path !== MANIFEST_PATH) {
           fail('backupUnrecognized')
         }
-        checkManifest(await readJson(entry))
+        checkManifest(await readJsonEntry(entry))
         manifest = true
-      } else if (path === USER_PATH && !index && imported.size === 0) {
+        continue
+      }
+      if (path === USER_PATH && !index && imported.size === 0) {
         // 账号信息（已脱敏）不导入；文件可能缺失。
         await skipEntry(entry)
-      } else if (sessionId !== null && !index) {
+        continue
+      }
+      if (sessionId !== null && !index) {
+        if (!wanted(sessionId)) {
+          // 未选中的会话不读正文，跳过其 JSON 与附件。
+          continue
+        }
         if (sessionBatchBytes + entry.size > maxSessionBatchBytes) {
           await flushSessions()
         }
-        const local = toLocalSession(readSessionFile(await readJson(entry)))
+        const local = toLocalSession(readSessionFile(await readJsonEntry(entry)))
         if (local.session.id !== sessionId || imported.has(sessionId)) {
           fail('backupIncomplete')
         }
@@ -212,12 +226,20 @@ export const importArchive = async (
         ) {
           await flushSessions()
         }
-      } else if (path === INDEX_PATH && !index) {
-        index = readSessionIndex(await readJson(entry))
+        continue
+      }
+      if (path === INDEX_PATH && !index) {
+        index = readSessionIndex(await readJsonEntry(entry))
         await flushSessions()
-      } else if (
+        continue
+      }
+      const owner = parseFilesPath(path)
+      if (owner !== null && !wanted(owner)) {
+        continue
+      }
+      if (
         index
-          ? !imported.has(fileOwner(path) ?? '')
+          ? !imported.has(owner ?? '')
           : !currentSessionId || !path.startsWith(sessionFilesDir(currentSessionId))
       ) {
         // 附件正文已随所属会话处理，此处仍校验归档中的位置。
@@ -230,13 +252,15 @@ export const importArchive = async (
   if (!manifest) {
     fail('backupUnrecognized')
   }
-  // index 只列出成功写出的会话，与会话文件一一对应。
+  // index 与会话文件一一对应；只要求被导入的会话都在索引中。
   const listed = new Set(index?.map((entry) => entry.id))
+  const missingSelection = selection !== undefined && [...selection].some((id) => !listed.has(id))
   if (
     !index ||
     listed.size !== index.length ||
-    listed.size !== imported.size ||
-    [...imported].some((id) => !listed.has(id))
+    missingSelection ||
+    [...imported].some((id) => !listed.has(id)) ||
+    (selection === undefined && listed.size !== imported.size)
   ) {
     fail('backupIncomplete')
   }

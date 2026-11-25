@@ -13,6 +13,10 @@ export const sessionFilesDir = (sessionId: string) => `chat_sessions/${sessionId
 export const parseSessionPath = (path: string): string | null =>
   /^chat_sessions\/([^/]+)\.json$/.exec(path)?.[1] ?? null
 
+/** 附件条目所属的会话 ID；不是会话附件时返回 null */
+export const parseFilesPath = (path: string): string | null =>
+  /^chat_sessions\/([^/]+)_files\//.exec(path)?.[1] ?? null
+
 /** 安全路径片段：路径分隔符映射为 _，空值、. 与 .. 映射为 unnamed */
 const safeName = (name: string) => {
   const result = name.replace(/[/\\]/g, '_')
