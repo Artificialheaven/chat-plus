@@ -106,12 +106,17 @@ const checkExtra = (bytes: Uint8Array) => {
   }
 }
 
+// 复用同一个解码器：每个条目都新建 TextDecoder 在数万条目下开销明显。
+const utf8Decoder = new TextDecoder('utf-8', { fatal: true })
+
 const decodePath = (bytes: Uint8Array, flags: number) => {
   // 非 UTF-8 编码的 ZIP 文件名仅接受 ASCII，确保附件路径解码准确。
   if (!(flags & 0x800) && bytes.some((byte) => byte > 0x7f)) {
     invalid()
   }
-  const path = new TextDecoder('utf-8', { fatal: true }).decode(bytes).normalize('NFC')
+  const decoded = utf8Decoder.decode(bytes)
+  // 纯 ASCII 已是 NFC 规范形式（字节数等于字符数），跳过昂贵的 normalize。
+  const path = decoded.length === bytes.length ? decoded : decoded.normalize('NFC')
   if (!path || path.includes('\\') || path.includes('\0') || /^[A-Za-z]:/.test(path)) {
     invalid()
   }
@@ -133,7 +138,12 @@ type Entry = {
   offset: number
 }
 
-type Directory = { entries: Entry[]; offset: number }
+type Directory = {
+  entries: Entry[]
+  byPath: Map<string, Entry>
+  boundaries: Map<string, number>
+  offset: number
+}
 const directories = new WeakMap<File, Directory>()
 
 const readDirectory = async (file: File): Promise<Directory> => {
@@ -172,6 +182,10 @@ const readDirectory = async (file: File): Promise<Directory> => {
   ) {
     invalid()
   }
+  // 一次性读入整个中央目录再同步解析：ZIP32 条目数上限 65535，目录体积有界，
+  // 避免每个条目 3 次异步读取（大归档下这是主要的固定开销）。
+  const directory = await readBytes(file, offset, size)
+  const directoryView = viewOf(directory)
   const entries: Entry[] = []
   const paths = new Set<string>()
   let cursor = 0
@@ -179,18 +193,17 @@ const readDirectory = async (file: File): Promise<Directory> => {
     if (cursor + 46 > size) {
       invalid()
     }
-    const view = viewOf(await readBytes(file, offset + cursor, 46))
-    if (view.getUint32(0, true) !== 0x02014b50) {
+    if (directoryView.getUint32(cursor, true) !== 0x02014b50) {
       invalid()
     }
-    const flags = view.getUint16(8, true)
-    const method = view.getUint16(10, true)
-    const compressedSize = view.getUint32(20, true)
-    const entrySize = view.getUint32(24, true)
-    const nameLength = view.getUint16(28, true)
-    const extraLength = view.getUint16(30, true)
-    const next = cursor + 46 + nameLength + extraLength + view.getUint16(32, true)
-    const entryOffset = view.getUint32(42, true)
+    const flags = directoryView.getUint16(cursor + 8, true)
+    const method = directoryView.getUint16(cursor + 10, true)
+    const compressedSize = directoryView.getUint32(cursor + 20, true)
+    const entrySize = directoryView.getUint32(cursor + 24, true)
+    const nameLength = directoryView.getUint16(cursor + 28, true)
+    const extraLength = directoryView.getUint16(cursor + 30, true)
+    const next = cursor + 46 + nameLength + extraLength + directoryView.getUint16(cursor + 32, true)
+    const entryOffset = directoryView.getUint32(cursor + 42, true)
     // 只允许 deflate 选项、data descriptor 与 UTF-8 标志。
     if (
       flags & ~0x80e ||
@@ -199,13 +212,13 @@ const readDirectory = async (file: File): Promise<Directory> => {
       entrySize === 0xffffffff ||
       (method === 0 && compressedSize !== entrySize) ||
       entryOffset >= offset ||
-      view.getUint16(34, true) !== 0 ||
-      ((view.getUint32(38, true) >>> 16) & 0xf000) === 0xa000 ||
+      directoryView.getUint16(cursor + 34, true) !== 0 ||
+      ((directoryView.getUint32(cursor + 38, true) >>> 16) & 0xf000) === 0xa000 ||
       next > size
     ) {
       invalid()
     }
-    const name = await readBytes(file, offset + cursor + 46, nameLength)
+    const name = directory.subarray(cursor + 46, cursor + 46 + nameLength)
     const path = decodePath(name, flags)
     // 目录和同名文件也不能互相覆盖。
     const identity = path.endsWith('/') ? path.slice(0, -1) : path
@@ -213,13 +226,13 @@ const readDirectory = async (file: File): Promise<Directory> => {
       invalid()
     }
     paths.add(identity)
-    checkExtra(await readBytes(file, offset + cursor + 46 + nameLength, extraLength))
+    checkExtra(directory.subarray(cursor + 46 + nameLength, cursor + 46 + nameLength + extraLength))
     entries.push({
       path,
       name: name.slice(),
       flags,
       method,
-      crc: view.getUint32(16, true),
+      crc: directoryView.getUint32(cursor + 16, true),
       compressedSize,
       size: entrySize,
       offset: entryOffset,
@@ -229,9 +242,16 @@ const readDirectory = async (file: File): Promise<Directory> => {
   if (cursor !== size) {
     invalid()
   }
-  const directory = { entries: entries.sort((a, b) => a.offset - b.offset), offset }
-  directories.set(file, directory)
-  return directory
+  const sorted = entries.sort((a, b) => a.offset - b.offset)
+  const byPath = new Map<string, Entry>()
+  const boundaries = new Map<string, number>()
+  for (const [index, entry] of sorted.entries()) {
+    byPath.set(entry.path, entry)
+    boundaries.set(entry.path, sorted[index + 1]?.offset ?? offset)
+  }
+  const parsed = { entries: sorted, byPath, boundaries, offset }
+  directories.set(file, parsed)
+  return parsed
 }
 
 const checkDataDescriptor = async (file: File, entry: Entry, end: number, boundary: number) => {
@@ -297,68 +317,114 @@ export type ArchiveEntry = {
   stream: AsyncIterable<Uint8Array>
 }
 
+/** 条目元信息；列出目录时不会读取任何条目数据。 */
+export type ArchiveEntryInfo = {
+  path: string
+  size: number
+  offset: number
+  directory: boolean
+}
+
+/** 逐块解压并校验 CRC；yield 暂停解压，等待调用方完成异步写入，不缓存整个条目。 */
+const openStream = (file: File, entry: Entry, boundary: number): AsyncIterable<Uint8Array> =>
+  (async function* (): AsyncGenerator<Uint8Array> {
+    const start = await readEntryOffset(file, entry, boundary)
+    let written = 0
+    let crc = 0xffffffff
+    const pending: Uint8Array[] = []
+    const append = (chunk: Uint8Array) => {
+      written += chunk.length
+      if (written > entry.size) {
+        invalid()
+      }
+      // 索引遍历比 for...of（TypedArray 迭代器）快数倍，大条目下差异明显。
+      for (let index = 0; index < chunk.length; index++) {
+        crc = (crc >>> 8) ^ crcTable[(crc ^ chunk[index]) & 0xff]
+      }
+      if (chunk.length) {
+        pending.push(chunk)
+      }
+    }
+    const inflate = entry.method === 8 ? new Inflate(append) : null
+    for (let offset = 0; offset < entry.compressedSize; offset += READ_CHUNK_BYTES) {
+      const chunk = await readBytes(
+        file,
+        start + offset,
+        Math.min(READ_CHUNK_BYTES, entry.compressedSize - offset)
+      )
+      if (!inflate) {
+        append(chunk)
+        yield* pending.splice(0)
+        continue
+      }
+      for (let cursor = 0; cursor < chunk.length; cursor += INFLATE_CHUNK_BYTES) {
+        const sliceEnd = Math.min(cursor + INFLATE_CHUNK_BYTES, chunk.length)
+        inflate.push(chunk.subarray(cursor, sliceEnd), offset + sliceEnd === entry.compressedSize)
+        // yield 暂停解压，等待调用方完成异步写入；不缓存整个条目。
+        yield* pending.splice(0)
+      }
+    }
+    if (inflate && entry.compressedSize === 0) {
+      inflate.push(new Uint8Array(), true)
+      yield* pending.splice(0)
+    }
+    if (written !== entry.size || (crc ^ 0xffffffff) >>> 0 !== entry.crc) {
+      invalid()
+    }
+    // 读完正文再检查描述符，避免提前跳到条目末尾。
+    await checkDataDescriptor(file, entry, start + entry.compressedSize, boundary)
+  })()
+
 /**
  * 按物理顺序枚举文件，校验并跳过目录。各文件可按需逐块读取并校验 CRC。
  * 数据块可能共享读窗口，请勿修改。
  */
 export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
   const directory = await readDirectory(file)
-  for (const [index, entry] of directory.entries.entries()) {
-    const boundary = directory.entries[index + 1]?.offset ?? directory.offset
+  for (const entry of directory.entries) {
+    const boundary = directory.boundaries.get(entry.path) ?? directory.offset
     if (entry.path.endsWith('/')) {
       const start = await readEntryOffset(file, entry, boundary)
       await checkDataDescriptor(file, entry, start + entry.compressedSize, boundary)
       continue
     }
-    const stream = async function* (): AsyncGenerator<Uint8Array> {
-      const start = await readEntryOffset(file, entry, boundary)
-      let written = 0
-      let crc = 0xffffffff
-      const pending: Uint8Array[] = []
-      const append = (chunk: Uint8Array) => {
-        written += chunk.length
-        if (written > entry.size) {
-          invalid()
-        }
-        for (const byte of chunk) {
-          crc = (crc >>> 8) ^ crcTable[(crc ^ byte) & 0xff]
-        }
-        if (chunk.length) {
-          pending.push(chunk)
-        }
-      }
-      const inflate = entry.method === 8 ? new Inflate(append) : null
-      for (let offset = 0; offset < entry.compressedSize; offset += READ_CHUNK_BYTES) {
-        const chunk = await readBytes(
-          file,
-          start + offset,
-          Math.min(READ_CHUNK_BYTES, entry.compressedSize - offset)
-        )
-        if (!inflate) {
-          append(chunk)
-          yield* pending.splice(0)
-          continue
-        }
-        for (let cursor = 0; cursor < chunk.length; cursor += INFLATE_CHUNK_BYTES) {
-          const sliceEnd = Math.min(cursor + INFLATE_CHUNK_BYTES, chunk.length)
-          inflate.push(chunk.subarray(cursor, sliceEnd), offset + sliceEnd === entry.compressedSize)
-          // yield 暂停解压，等待调用方完成异步写入；不缓存整个条目。
-          yield* pending.splice(0)
-        }
-      }
-      if (inflate && entry.compressedSize === 0) {
-        inflate.push(new Uint8Array(), true)
-        yield* pending.splice(0)
-      }
-      if (written !== entry.size || (crc ^ 0xffffffff) >>> 0 !== entry.crc) {
-        invalid()
-      }
-      // 读完正文再检查描述符，避免提前跳到条目末尾。
-      await checkDataDescriptor(file, entry, start + entry.compressedSize, boundary)
+    yield {
+      path: entry.path,
+      size: entry.size,
+      offset: entry.offset,
+      stream: openStream(file, entry, boundary),
     }
-    yield { path: entry.path, size: entry.size, offset: entry.offset, stream: stream() }
   }
   fileWindows.delete(file)
+}
+
+/** 只解析中央目录，返回全部条目元信息；不读取任何条目数据。 */
+export const listArchiveEntries = async (file: File): Promise<ArchiveEntryInfo[]> => {
+  const directory = await readDirectory(file)
+  return directory.entries.map((entry) => ({
+    path: entry.path,
+    size: entry.size,
+    offset: entry.offset,
+    directory: entry.path.endsWith('/'),
+  }))
+}
+
+/** 按路径直接打开单个条目，不遍历其他条目；不存在或为目录时返回 undefined。 */
+export const openArchiveEntry = async (
+  file: File,
+  path: string
+): Promise<ArchiveEntry | undefined> => {
+  const directory = await readDirectory(file)
+  const entry = directory.byPath.get(path)
+  if (!entry || entry.path.endsWith('/')) {
+    return undefined
+  }
+  return {
+    path: entry.path,
+    size: entry.size,
+    offset: entry.offset,
+    stream: openStream(file, entry, directory.boundaries.get(path) ?? directory.offset),
+  }
 }
 
 /** detectType 最多接收条目的前 16 字节。 */

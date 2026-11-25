@@ -2,23 +2,16 @@ import * as db from '../db.js'
 import type { Session } from '../types.js'
 import { BackupError, fail } from './errors.js'
 import { readJsonEntry } from './entryJson.js'
-import type { SessionIndexEntry } from './format.js'
-import {
-  INDEX_PATH,
-  MANIFEST_PATH,
-  USER_PATH,
-  parseFilesPath,
-  parseSessionPath,
-  sessionFilesDir,
-} from './paths.js'
-import { checkManifest, readSessionFile, readSessionIndex } from './schema.js'
+import { loadIndex, loadManifest } from './archiveCache.js'
+import { MANIFEST_PATH, parseFilesPath, parseSessionPath, sessionPath } from './paths.js'
+import { readSessionFile } from './schema.js'
 import { toLocalSession } from './toLocal.js'
 import {
   ArchiveError,
   isZipFile,
-  readArchive,
+  listArchiveEntries,
+  openArchiveEntry,
   readEntry,
-  skipEntry,
   type ArchiveEntry,
 } from './zipReader.js'
 
@@ -58,6 +51,19 @@ const imageType = (bytes: Uint8Array): string => {
   return ''
 }
 
+/** 读取 manifest 并校验格式版本；不是合法归档时抛出对应提示。 */
+const readManifest = async (file: File, entries: { path: string; directory: boolean }[]) => {
+  // manifest 必须是归档的首个条目
+  const first = entries.find((entry) => !entry.directory)
+  if (!first || first.path !== MANIFEST_PATH) {
+    return fail('backupUnrecognized')
+  }
+  await loadManifest(file)
+}
+
+const wrapArchiveError = (error: unknown): unknown =>
+  error instanceof ArchiveError ? new BackupError('backupIncomplete') : error
+
 /**
  * 检查 ZIP 格式、首个 manifest 条目及格式版本。
  * 校验失败时保留正在生成的回答和现有暂存数据。
@@ -67,23 +73,15 @@ export const checkArchiveFormat = async (file: File): Promise<void> => {
     fail('backupUnrecognized')
   }
   try {
-    for await (const entry of readArchive(file)) {
-      if (entry.path !== MANIFEST_PATH) {
-        fail('backupUnrecognized')
-      }
-      checkManifest(await readJsonEntry(entry))
-      return
-    }
+    await readManifest(file, await listArchiveEntries(file))
   } catch (error) {
-    throw error instanceof ArchiveError ? new BackupError('backupIncomplete') : error
+    throw wrapArchiveError(error)
   }
-  fail('backupUnrecognized')
 }
 
 /**
- * 按会话读取 JSON 和对应文件，保留归档物理顺序的格式校验。
- * 也支持会话与图片交错排列、index 位于末尾的条目顺序。
- * 提供 sessionIds 时只解压这些会话及其附件，未选中的会话完全跳过，不做 CRC 校验。
+ * 只解析 ZIP 目录，然后按路径读取选中的会话 JSON 及其附件。
+ * 未选中会话的条目既不解析也不读取，因此归档体积不影响导入耗时。
  * 写入导入暂存存储；调用方负责先清空暂存，成功后替换正式数据，失败时清理暂存。
  */
 export const importArchive = async (
@@ -94,15 +92,11 @@ export const importArchive = async (
     fail('backupUnrecognized')
   }
   const { onProgress, sessionIds: selection } = options
-  const wanted = (id: string) => selection === undefined || selection.has(id)
   const imported = new Set<string>()
   const firstImageOffset = new Map<string, number>()
   const fileSessions = new Map<string, Set<string>>()
   // 同一图片可能出现在多个会话目录，待写入的原件也参与去重。
   const stored = new Map<string, string>()
-  let manifest = false
-  let index: SessionIndexEntry[] | undefined
-  let currentSessionId: string | undefined
   let totalSessions = 0
 
   const maxSessionBatchCount = 32
@@ -135,8 +129,8 @@ export const importArchive = async (
     imageBatchBytes = 0
   }
   const saveImage = async (entry: ArchiveEntry, id: string) => {
+    // 同一图片出现在多个会话目录时只保留物理位置最靠前的一份。
     if (entry.offset >= (firstImageOffset.get(id) ?? Infinity)) {
-      await skipEntry(entry)
       return
     }
     if (imageBatchBytes + entry.size > maxImageBatchBytes) {
@@ -153,118 +147,111 @@ export const importArchive = async (
   }
 
   try {
-    const entries: ArchiveEntry[] = []
-    const filesBySession = new Map<string, ArchiveEntry[]>()
-    for await (const entry of readArchive(file)) {
-      entries.push(entry)
-      const id = parseSessionPath(entry.path)
-      if (id !== null) {
-        if (wanted(id)) {
-          filesBySession.set(id, [])
-        }
+    const entries = await listArchiveEntries(file)
+    await readManifest(file, entries)
+
+    const index = await loadIndex(file)
+    const listed = new Set(index.map((item) => item.id))
+    if (listed.size !== index.length) {
+      fail('backupIncomplete')
+    }
+
+    // 只记录目录里实际存在的会话 ID；附件路径按选中会话收集，避免为未选中的会话建表。
+    const present = new Set<string>()
+    const filesBySession = new Map<string, string[]>()
+    const wanted = (id: string) => selection === undefined || selection.has(id)
+    for (const entry of entries) {
+      if (entry.directory) {
+        continue
+      }
+      const sessionId = parseSessionPath(entry.path)
+      if (sessionId !== null) {
+        present.add(sessionId)
+        continue
+      }
+      const owner = parseFilesPath(entry.path)
+      if (owner === null || !wanted(owner)) {
+        continue
+      }
+      const paths = filesBySession.get(owner)
+      if (paths) {
+        paths.push(entry.path)
       } else {
-        const owner = parseFilesPath(entry.path)
-        if (owner !== null) {
-          filesBySession.get(owner)?.push(entry)
-        }
+        filesBySession.set(owner, [entry.path])
       }
     }
-    totalSessions = filesBySession.size
+
+    // 索引与会话文件必须一一对应，附件目录必须属于索引内的会话。
+    for (const item of index) {
+      if (!present.has(item.id)) {
+        return fail('backupIncomplete')
+      }
+    }
+    for (const id of present) {
+      if (!listed.has(id)) {
+        return fail('backupIncomplete')
+      }
+    }
+    if ([...filesBySession.keys()].some((owner) => !listed.has(owner))) {
+      fail('backupIncomplete')
+    }
+    if (selection !== undefined && [...selection].some((id) => !listed.has(id))) {
+      fail('backupIncomplete')
+    }
+
+    const targets = selection === undefined ? index : index.filter((item) => selection.has(item.id))
+    totalSessions = targets.length
     onProgress?.(0, totalSessions)
-    for (const entry of entries) {
-      const { path } = entry
-      const sessionId = parseSessionPath(path)
-      if (!manifest) {
-        if (path !== MANIFEST_PATH) {
-          fail('backupUnrecognized')
-        }
-        checkManifest(await readJsonEntry(entry))
-        manifest = true
-        continue
+
+    for (const item of targets) {
+      const entry = await openArchiveEntry(file, sessionPath(item.id))
+      if (!entry) {
+        return fail('backupIncomplete')
       }
-      if (path === USER_PATH && !index && imported.size === 0) {
-        // 账号信息（已脱敏）不导入；文件可能缺失。
-        await skipEntry(entry)
-        continue
+      const local = toLocalSession(readSessionFile(await readJsonEntry(entry)))
+      if (local.session.id !== item.id || imported.has(item.id)) {
+        fail('backupIncomplete')
       }
-      if (sessionId !== null && !index) {
-        if (!wanted(sessionId)) {
-          // 未选中的会话不读正文，跳过其 JSON 与附件。
+      imported.add(item.id)
+
+      for (const imagePath of filesBySession.get(item.id) ?? []) {
+        const id = local.images.get(imagePath)
+        if (id === undefined) {
           continue
         }
-        if (sessionBatchBytes + entry.size > maxSessionBatchBytes) {
-          await flushSessions()
+        const imageEntry = await openArchiveEntry(file, imagePath)
+        if (!imageEntry) {
+          return fail('backupIncomplete')
         }
-        const local = toLocalSession(readSessionFile(await readJsonEntry(entry)))
-        if (local.session.id !== sessionId || imported.has(sessionId)) {
-          fail('backupIncomplete')
+        await saveImage(imageEntry, id)
+      }
+      for (const message of local.session.messages) {
+        if (message.role !== 'user') {
+          continue
         }
-        imported.add(sessionId)
-        currentSessionId = sessionId
-        for (const fileEntry of filesBySession.get(sessionId) ?? []) {
-          const id = local.images.get(fileEntry.path)
-          await (id === undefined ? skipEntry(fileEntry) : saveImage(fileEntry, id))
-        }
-        for (const message of local.session.messages) {
-          if (message.role !== 'user') {
-            continue
+        for (const attachment of message.files) {
+          let sessions = fileSessions.get(attachment.id)
+          if (!sessions) {
+            sessions = new Set()
+            fileSessions.set(attachment.id, sessions)
           }
-          for (const attachment of message.files) {
-            let sessions = fileSessions.get(attachment.id)
-            if (!sessions) {
-              sessions = new Set()
-              fileSessions.set(attachment.id, sessions)
-            }
-            sessions.add(sessionId)
-          }
+          sessions.add(item.id)
         }
-        sessionBatch.push(local.session)
-        sessionBatchBytes += entry.size
-        if (
-          sessionBatch.length >= maxSessionBatchCount ||
-          sessionBatchBytes >= maxSessionBatchBytes
-        ) {
-          await flushSessions()
-        }
-        continue
       }
-      if (path === INDEX_PATH && !index) {
-        index = readSessionIndex(await readJsonEntry(entry))
-        await flushSessions()
-        continue
-      }
-      const owner = parseFilesPath(path)
-      if (owner !== null && !wanted(owner)) {
-        continue
-      }
+      sessionBatch.push(local.session)
+      sessionBatchBytes += entry.size
       if (
-        index
-          ? !imported.has(owner ?? '')
-          : !currentSessionId || !path.startsWith(sessionFilesDir(currentSessionId))
+        sessionBatch.length >= maxSessionBatchCount ||
+        sessionBatchBytes >= maxSessionBatchBytes
       ) {
-        // 附件正文已随所属会话处理，此处仍校验归档中的位置。
-        fail('backupIncomplete')
+        await flushSessions()
       }
     }
   } catch (error) {
-    throw error instanceof ArchiveError ? new BackupError('backupIncomplete') : error
-  }
-  if (!manifest) {
-    fail('backupUnrecognized')
-  }
-  // index 与会话文件一一对应；只要求被导入的会话都在索引中。
-  const listed = new Set(index?.map((entry) => entry.id))
-  const missingSelection = selection !== undefined && [...selection].some((id) => !listed.has(id))
-  if (
-    !index ||
-    listed.size !== index.length ||
-    missingSelection ||
-    [...imported].some((id) => !listed.has(id)) ||
-    (selection === undefined && listed.size !== imported.size)
-  ) {
-    fail('backupIncomplete')
+    throw wrapArchiveError(error)
   }
   await flushSessions()
+
   const targetSessions = new Set<string>()
   for (const [id, type] of stored) {
     if (!type) {
